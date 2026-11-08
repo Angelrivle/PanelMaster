@@ -1,0 +1,234 @@
+openapi: 3.1.0
+info:
+  title: NexusPanel Core Control Plane API
+  version: 1.0.0
+  description: >
+    API REST de alto rendimiento para la orquestación, gestión de servidores de juego,
+    aplicaciones web, bots y bases de datos. Incluye autenticación con JWT, refresh tokens
+    rotativos, 2FA TOTP y túneles en tiempo real para terminales xterm.js.
+servers:
+  - url: https://panel.nexuspanel.dev/api/v1
+    description: Production Cluster
+  - url: http://localhost:3000/api/v1
+    description: Local Development
+
+paths:
+  /auth/register:
+    post:
+      summary: Registro de usuario y organización inicial
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, username]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                username: { type: string, minLength: 3, maxLength: 32 }
+                orgName: { type: string }
+      responses:
+        '201':
+          description: Usuario creado exitosamente
+        '409':
+          description: Email o usuario ya en uso
+
+  /auth/login:
+    post:
+      summary: Inicio de sesión con soporte 2FA
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+                twoFactorCode: { type: string }
+      responses:
+        '200':
+          description: Token JWT y Refresh Token devueltos
+        '401':
+          description: Credenciales inválidas
+        '403':
+          description: Se requiere código 2FA TOTP
+
+  /auth/2fa/setup:
+    post:
+      summary: Iniciar configuración de 2FA TOTP
+      tags: [Auth]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string }
+                  qrCodeDataUrl: { type: string }
+
+  /services:
+    get:
+      summary: Listar todos los servicios de la organización
+      tags: [Services]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: header
+          name: x-organization-id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Lista de servicios activos y detenidos
+    post:
+      summary: Crear y orquestar un nuevo servicio en el nodo óptimo
+      tags: [Services]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: header
+          name: x-organization-id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, templateId, templateVersionId]
+              properties:
+                name: { type: string }
+                templateId: { type: string }
+                templateVersionId: { type: string }
+                memoryMb: { type: number, default: 2048 }
+                cpuCores: { type: number, default: 2.0 }
+                diskMb: { type: number, default: 10240 }
+                environment: { type: object, additionalProperties: { type: string } }
+      responses:
+        '201':
+          description: Servicio orquestado y creado en el clúster
+
+  /services/{id}/actions:
+    post:
+      summary: Ejecutar acciones de control de energía (START, STOP, RESTART)
+      tags: [Services]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [START, STOP, RESTART]
+      responses:
+        '200':
+          description: Acción ejecutada por el agente del nodo
+
+  /services/{id}/files:
+    get:
+      summary: Listar contenido de un directorio con SafeFS
+      tags: [Files]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: path
+          schema: { type: string, default: "" }
+      responses:
+        '200':
+          description: Árbol de archivos y carpetas
+
+  /services/{id}/files/content:
+    get:
+      summary: Leer contenido de archivo para Monaco Editor
+      tags: [Files]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Contenido de texto del archivo
+    post:
+      summary: Guardar contenido de archivo
+      tags: [Files]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, content]
+              properties:
+                path: { type: string }
+                content: { type: string }
+      responses:
+        '200':
+          description: Archivo guardado con éxito
+
+  /nodes:
+    get:
+      summary: Listar nodos del clúster y capacidades
+      tags: [Nodes]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Nodos, estado, CPU, RAM y servicios alojados
+    post:
+      summary: Registrar nuevo nodo en el clúster
+      tags: [Nodes]
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, fqdn, cpuCores, memoryTotalMb, diskTotalMb]
+              properties:
+                name: { type: string }
+                fqdn: { type: string }
+                agentPort: { type: number, default: 8443 }
+                cpuCores: { type: number }
+                memoryTotalMb: { type: number }
+                diskTotalMb: { type: number }
+      responses:
+        '201':
+          description: Nodo registrado exitosamente
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

@@ -1,0 +1,63 @@
+{
+  "name": "Minecraft Bedrock Dedicated Server (BDS)",
+  "slug": "minecraft-bedrock",
+  "category": "minecraft",
+  "type": "GAME_SERVER",
+  "description": "Official Mojang Minecraft Bedrock Dedicated Server for iOS, Android, Windows 10/11, and Consoles.",
+  "version": "latest",
+  "image": "itzg/minecraft-bedrock-server:latest",
+  "startupCommand": "",
+  "stopCommand": "stop",
+  "resources": {
+    "minCpuCores": 1.5,
+    "recommendedCpuCores": 2.5,
+    "minMemoryMb": 1024,
+    "recommendedMemoryMb": 2048,
+    "minDiskMb": 5120
+  },
+  "ports": [
+    {
+      "containerPort": 19132,
+      "protocol": "udp",
+      "name": "Bedrock Primary Port (IPv4)"
+    },
+    {
+      "containerPort": 19133,
+      "protocol": "udp",
+      "name": "Bedrock Secondary Port (IPv6)"
+    }
+  ],
+  "volumes": [
+    {
+      "containerPath": "/data",
+      "description": "Worlds, server.properties, behavior packs and permissions"
+    }
+  ],
+  "variables": [
+    {
+      "name": "EULA",
+      "displayName": "Accept Mojang EULA",
+      "description": "Must be set to TRUE",
+      "defaultValue": "TRUE",
+      "required": true
+    },
+    {
+      "name": "SERVER_NAME",
+      "displayName": "Server Name",
+      "defaultValue": "Nexus Bedrock Server",
+      "required": true
+    },
+    {
+      "name": "GAMEMODE",
+      "displayName": "Default Game Mode",
+      "defaultValue": "survival",
+      "required": false
+    },
+    {
+      "name": "DIFFICULTY",
+      "displayName": "Difficulty Level",
+      "defaultValue": "normal",
+      "required": false
+    }
+  ]
+}

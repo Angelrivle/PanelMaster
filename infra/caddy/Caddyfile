@@ -1,0 +1,21 @@
+{$DOMAIN:localhost} {
+    encode gzip zstd
+
+    # API and WebSocket live terminal
+    handle /api/* {
+        reverse_proxy api:3000
+    }
+
+    # Web SPA Frontend
+    handle /* {
+        reverse_proxy web:80
+    }
+
+    # Hardening Headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}

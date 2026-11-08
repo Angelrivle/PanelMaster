@@ -1,0 +1,32 @@
+{
+  "name": "Static Web (Nginx High Performance)",
+  "slug": "static-web-nginx",
+  "category": "web",
+  "type": "WEB_STATIC",
+  "description": "Nginx web server optimized for static sites (HTML, React, Vue, Svelte, Astro).",
+  "version": "alpine",
+  "image": "nginx:alpine",
+  "startupCommand": "nginx -g 'daemon off;'",
+  "stopCommand": "SIGQUIT",
+  "resources": {
+    "minCpuCores": 0.2,
+    "recommendedCpuCores": 1.0,
+    "minMemoryMb": 128,
+    "recommendedMemoryMb": 256,
+    "minDiskMb": 1024
+  },
+  "ports": [
+    {
+      "containerPort": 80,
+      "protocol": "tcp",
+      "name": "HTTP Port"
+    }
+  ],
+  "volumes": [
+    {
+      "containerPath": "/usr/share/nginx/html",
+      "description": "Static web build assets (HTML, CSS, JS)"
+    }
+  ],
+  "variables": []
+}

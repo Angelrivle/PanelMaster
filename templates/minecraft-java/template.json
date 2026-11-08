@@ -1,0 +1,73 @@
+{
+  "name": "Minecraft Java Edition (Paper)",
+  "slug": "minecraft-paper",
+  "category": "minecraft",
+  "type": "GAME_SERVER",
+  "description": "High performance Minecraft server software with PaperMC, plugins, and Spigot/Bukkit compatibility.",
+  "version": "1.20.4",
+  "image": "itzg/minecraft-server:latest",
+  "startupCommand": "",
+  "stopCommand": "stop",
+  "resources": {
+    "minCpuCores": 2.0,
+    "recommendedCpuCores": 4.0,
+    "minMemoryMb": 2048,
+    "recommendedMemoryMb": 4096,
+    "minDiskMb": 10240
+  },
+  "ports": [
+    {
+      "containerPort": 25565,
+      "protocol": "tcp",
+      "name": "Minecraft Primary Port"
+    },
+    {
+      "containerPort": 25565,
+      "protocol": "udp",
+      "name": "Minecraft Voice/UDP (optional)"
+    }
+  ],
+  "volumes": [
+    {
+      "containerPath": "/data",
+      "description": "Worlds, server.properties, plugins and player data"
+    }
+  ],
+  "variables": [
+    {
+      "name": "EULA",
+      "displayName": "Accept Mojang EULA",
+      "description": "Must be set to TRUE to run the server",
+      "defaultValue": "TRUE",
+      "required": true
+    },
+    {
+      "name": "TYPE",
+      "displayName": "Server Software Flavor",
+      "description": "PAPER, PURPUR, SPIGOT, FABRIC, FORGE or VANILLA",
+      "defaultValue": "PAPER",
+      "required": true
+    },
+    {
+      "name": "VERSION",
+      "displayName": "Minecraft Version",
+      "description": "Minecraft release version",
+      "defaultValue": "1.20.4",
+      "required": true
+    },
+    {
+      "name": "MEMORY",
+      "displayName": "JVM Max Heap",
+      "description": "Java memory heap allocation",
+      "defaultValue": "3G",
+      "required": true
+    },
+    {
+      "name": "ONLINE_MODE",
+      "displayName": "Online Mode (Auth)",
+      "description": "TRUE checks Mojang auth; FALSE allows cracked clients",
+      "defaultValue": "TRUE",
+      "required": false
+    }
+  ]
+}

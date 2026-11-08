@@ -1,0 +1,864 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -----------------------------------------------------------------------------
+// ENUMS
+// -----------------------------------------------------------------------------
+
+enum UserRole {
+  SUPER_ADMIN
+  PLATFORM_ADMIN
+  NODE_ADMIN
+  SUPPORT
+  ORGANIZATION_OWNER
+  ORGANIZATION_ADMIN
+  DEVELOPER
+  DEPLOYER
+  BILLING_MANAGER
+  VIEWER
+}
+
+enum ServiceStatus {
+  INSTALLING
+  STOPPED
+  STARTING
+  RUNNING
+  STOPPING
+  RESTARTING
+  UPDATING
+  SUSPENDED
+  MIGRATING
+  ERROR
+}
+
+enum WorkloadType {
+  GAME_SERVER
+  DISCORD_BOT
+  WEB_STATIC
+  WEB_DYNAMIC
+  API_BACKEND
+  DATABASE
+  WORKER_CRON
+}
+
+enum NodeStatus {
+  ONLINE
+  OFFLINE
+  DRAINING
+  MAINTENANCE
+  UNREACHABLE
+}
+
+enum DeploymentStatus {
+  QUEUED
+  IN_PROGRESS
+  SUCCESSFUL
+  FAILED
+  CANCELLED
+}
+
+enum BackupStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum StorageProvider {
+  LOCAL
+  S3_COMPATIBLE
+  WASABI
+  B2
+  GCS
+  AZURE_BLOB
+}
+
+enum ProtocolType {
+  TCP
+  UDP
+  BOTH
+}
+
+// -----------------------------------------------------------------------------
+// USERS & IDENTITY
+// -----------------------------------------------------------------------------
+
+model User {
+  id                   String                 @id @default(uuid())
+  email                String                 @unique
+  passwordHash         String
+  username             String                 @unique
+  fullName             String?
+  avatarUrl            String?
+  isSuperAdmin         Boolean                @default(false)
+  isActive             Boolean                @default(true)
+  isEmailVerified      Boolean                @default(false)
+  twoFactorEnabled     Boolean                @default(false)
+  twoFactorSecret      String?                // Encrypted with KMS/AES-256-GCM
+  recoveryCodes        String[]               @default([])
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  deletedAt            DateTime?
+
+  sessions             Session[]
+  refreshTokens        RefreshToken[]
+  memberships          Membership[]
+  apiKeys              ApiKey[]
+  auditLogs            AuditLog[]
+  servicesOwned        Service[]              @relation("ServiceOwner")
+  serviceCollaborators ServiceCollaborator[]
+
+  @@index([email])
+  @@index([username])
+}
+
+model Session {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash    String    @unique
+  userAgent    String?
+  ipAddress    String?
+  isRevoked    Boolean   @default(false)
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+  lastActiveAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  familyId  String   @default(uuid()) // Token rotation tracking
+  isRevoked Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId, familyId])
+}
+
+model ApiKey {
+  id             String    @id @default(uuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  keyHash        String    @unique
+  prefix         String    // e.g. "nxp_"
+  scopes         String[]  // Array of permission strings e.g. ["service.create", "service.read"]
+  allowedIps     String[]  @default([])
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+  revokedAt      DateTime?
+
+  @@index([userId])
+  @@index([organizationId])
+}
+
+// -----------------------------------------------------------------------------
+// MULTI-TENANCY: ORGANIZATIONS, TEAMS & RBAC
+// -----------------------------------------------------------------------------
+
+model Organization {
+  id          String        @id @default(uuid())
+  name        String
+  slug        String        @unique
+  description String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  deletedAt   DateTime?
+
+  memberships Membership[]
+  teams       Team[]
+  services    Service[]
+  networks    Network[]
+  apiKeys     ApiKey[]
+  plans       Subscription?
+  invoices    Invoice[]
+
+  @@index([slug])
+}
+
+model Team {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  memberships    TeamMembership[]
+  roles          RoleAssignment[]
+
+  @@unique([organizationId, name])
+}
+
+model Membership {
+  id             String          @id @default(uuid())
+  userId         String
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  role           UserRole        @default(DEVELOPER)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  teamMemberships TeamMembership[]
+  customRoles     RoleAssignment[]
+
+  @@unique([userId, organizationId])
+  @@index([userId])
+  @@index([organizationId])
+}
+
+model TeamMembership {
+  id           String     @id @default(uuid())
+  teamId       String
+  team         Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  membershipId String
+  membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@unique([teamId, membershipId])
+}
+
+model Role {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  description String?
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  permissions RolePermission[]
+  assignments RoleAssignment[]
+}
+
+model Permission {
+  id          String           @id @default(uuid())
+  action      String           @unique // e.g. "service.create", "service.console.write"
+  category    String           // e.g. "service", "node", "billing"
+  description String?
+
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model RoleAssignment {
+  id           String      @id @default(uuid())
+  roleId       String
+  role         Role        @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  membershipId String?
+  membership   Membership? @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  teamId       String?
+  team         Team?       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  createdAt    DateTime    @default(now())
+
+  @@index([membershipId])
+  @@index([teamId])
+}
+
+// -----------------------------------------------------------------------------
+// INFRASTRUCTURE: NODES, REGIONS & NETWORKS
+// -----------------------------------------------------------------------------
+
+model Region {
+  id          String   @id @default(uuid())
+  name        String
+  code        String   @unique // e.g. "us-east-1", "eu-central-1", "sa-lima"
+  description String?
+  countryCode String?
+  city        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  nodes       Node[]
+}
+
+model NodeGroup {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  nodes       Node[]
+}
+
+model Node {
+  id                  String       @id @default(uuid())
+  name                String       @unique
+  regionId            String
+  region              Region       @relation(fields: [regionId], references: [id])
+  nodeGroupId         String?
+  nodeGroup           NodeGroup?   @relation(fields: [nodeGroupId], references: [id])
+  fqdn                String       // Fully Qualified Domain Name or Public IP
+  agentPort           Int          @default(8443)
+  agentTokenHash      String       // Shared token / TLS client cert fingerprint
+  status              NodeStatus   @default(ONLINE)
+  isUnderMaintenance  Boolean      @default(false)
+  cpuCores            Int
+  cpuModel            String?
+  memoryTotalBytes    BigInt
+  diskTotalBytes      BigInt
+  memoryAllocated     BigInt       @default(0)
+  diskAllocated       BigInt       @default(0)
+  cpuOvercommitRatio  Float        @default(1.0)
+  memOvercommitRatio  Float        @default(1.0)
+  diskOvercommitRatio Float        @default(1.0)
+  dockerVersion       String?
+  kernelVersion       String?
+  osInfo              String?
+  lastHeartbeatAt     DateTime     @default(now())
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  portAllocations     PortAllocation[]
+  serviceInstances    ServiceInstance[]
+  nodeResources       NodeResourceMetric[]
+
+  @@index([regionId])
+  @@index([status])
+}
+
+model NodeResourceMetric {
+  id              String   @id @default(uuid())
+  nodeId          String
+  node            Node     @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  cpuUsagePercent Float
+  memoryUsedBytes BigInt
+  diskUsedBytes   BigInt
+  networkRxBytes  BigInt
+  networkTxBytes  BigInt
+  iopsTotal       Float?
+  activeServices  Int      @default(0)
+  recordedAt      DateTime @default(now())
+
+  @@index([nodeId, recordedAt])
+}
+
+model PortAllocation {
+  id                String           @id @default(uuid())
+  nodeId            String
+  node              Node             @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  port              Int
+  protocol          ProtocolType     @default(TCP)
+  isPrimary         Boolean          @default(false)
+  serviceInstanceId String?
+  serviceInstance   ServiceInstance? @relation(fields: [serviceInstanceId], references: [id], onDelete: SetNull)
+  assignedAt        DateTime?
+
+  @@unique([nodeId, port, protocol])
+  @@index([serviceInstanceId])
+}
+
+model Network {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  subnetCidr     String       // e.g. "10.244.10.0/24"
+  driver         String       @default("bridge") // bridge, overlay
+  isIsolated     Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  services       Service[]
+}
+
+// -----------------------------------------------------------------------------
+// TEMPLATES & WORKLOAD SPECIFICATION (EGGS / BLUEPRINTS)
+// -----------------------------------------------------------------------------
+
+model Template {
+  id          String            @id @default(uuid())
+  slug        String            @unique
+  name        String
+  category    String            // "minecraft", "voice", "bots", "databases", "web"
+  description String?
+  iconUrl     String?
+  author      String            @default("NexusPanel")
+  isCommunity Boolean           @default(false)
+  isVerified  Boolean           @default(true)
+  type        WorkloadType      @default(GAME_SERVER)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  versions    TemplateVersion[]
+  services    Service[]
+
+  @@index([category])
+}
+
+model TemplateVersion {
+  id                String       @id @default(uuid())
+  templateId        String
+  template          Template     @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  version           String       // Semantic version "1.0.0"
+  dockerImage       String       // e.g. "ghcr.io/nexuspanel/images:minecraft-paper"
+  installScript     String?      // Bash or Container bootstrap entrypoint
+  installContainer  String?      // Container image used for install stage
+  startupCommand    String       // Default container entrypoint/cmd
+  stopCommand       String?      // e.g. "stop" for Minecraft stdin or "SIGINT"
+  minCpuCores       Float        @default(1.0)
+  minMemoryMb       Int          @default(1024)
+  minDiskMb         Int          @default(5120)
+  healthCheckHttp   String?      // Optional health check path "/healthz"
+  healthCheckPort   Int?
+  healthCheckCmd    String?      // Optional exec probe
+  isDeprecated      Boolean      @default(false)
+  changelog         String?
+  createdAt         DateTime     @default(now())
+
+  variables         TemplateVariable[]
+  deployments       DeploymentRevision[]
+  services          Service[]
+
+  @@unique([templateId, version])
+}
+
+model TemplateVariable {
+  id                String          @id @default(uuid())
+  templateVersionId String
+  templateVersion   TemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Cascade)
+  name              String          // ENV name e.g. "SERVER_PORT", "EULA"
+  displayName       String
+  description       String?
+  defaultValue      String?
+  rules             String?         // Validation rules e.g. "required|string|max:64"
+  isUserViewable    Boolean         @default(true)
+  isUserEditable    Boolean         @default(true)
+  isSecret          Boolean         @default(false)
+
+  @@unique([templateVersionId, name])
+}
+
+// -----------------------------------------------------------------------------
+// SERVICES & WORKLOAD RUNTIME
+// -----------------------------------------------------------------------------
+
+model Service {
+  id                 String              @id @default(uuid())
+  name               String
+  slug               String
+  description        String?
+  organizationId     String
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ownerId            String
+  owner              User                @relation("ServiceOwner", fields: [ownerId], references: [id])
+  templateId         String
+  template           Template            @relation(fields: [templateId], references: [id])
+  templateVersionId  String
+  templateVersion    TemplateVersion     @relation(fields: [templateVersionId], references: [id])
+  networkId          String?
+  network            Network?            @relation(fields: [networkId], references: [id], onDelete: SetNull)
+  status             ServiceStatus       @default(INSTALLING)
+  workloadType       WorkloadType        @default(GAME_SERVER)
+  autoRestart        Boolean             @default(true)
+  restartPolicy      String              @default("unless-stopped") // "always", "on-failure", "unless-stopped"
+  cpuLimitCores      Float               @default(2.0)
+  memoryLimitBytes   BigInt              @default(2147483648) // 2GB
+  diskLimitBytes     BigInt              @default(10737418240) // 10GB
+  ioLimitWeight      Int                 @default(500) // BlkIO Weight 10-1000
+  pidLimit           Int                 @default(512)
+  readOnlyRootFs     Boolean             @default(false)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  deletedAt          DateTime?
+
+  instances          ServiceInstance[]
+  collaborators      ServiceCollaborator[]
+  environmentVars    ServiceEnvironmentVariable[]
+  secrets            ServiceSecret[]
+  volumes            ServiceVolume[]
+  domains            ServiceDomain[]
+  deployments        Deployment[]
+  backups            Backup[]
+  schedules          Schedule[]
+  alerts             AlertRule[]
+  databases          ManagedDatabase[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@index([status])
+}
+
+model ServiceCollaborator {
+  id          String   @id @default(uuid())
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permissions String[] // e.g. ["service.files.read", "service.start"]
+  createdAt   DateTime @default(now())
+
+  @@unique([serviceId, userId])
+}
+
+model ServiceInstance {
+  id               String           @id @default(uuid())
+  serviceId        String
+  service          Service          @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  nodeId           String
+  node             Node             @relation(fields: [nodeId], references: [id])
+  containerId      String?          @unique // Docker container hash
+  containerName    String           @unique
+  hostDataPath     String           // Absolute path on node disk: /var/lib/nexuspanel/volumes/<id>
+  ipAddress        String?
+  status           ServiceStatus    @default(INSTALLING)
+  exitCode         Int?
+  lastCrashAt      DateTime?
+  startedAt        DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  ports            PortAllocation[]
+
+  @@index([serviceId])
+  @@index([nodeId])
+}
+
+model ServiceEnvironmentVariable {
+  id        String   @id @default(uuid())
+  serviceId String
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([serviceId, key])
+}
+
+model ServiceSecret {
+  id              String   @id @default(uuid())
+  serviceId       String
+  service         Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  key             String
+  encryptedValue  String   // AES-256-GCM encrypted
+  keyFingerprint  String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([serviceId, key])
+}
+
+model ServiceVolume {
+  id               String   @id @default(uuid())
+  serviceId        String
+  service          Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  containerPath    String   // Mount path inside container e.g. "/data"
+  isReadOnly       Boolean  @default(false)
+  quotaBytes       BigInt?
+  createdAt        DateTime @default(now())
+
+  fileVersions     FileVersion[]
+
+  @@unique([serviceId, containerPath])
+}
+
+model ServiceDomain {
+  id               String       @id @default(uuid())
+  serviceId        String
+  service          Service      @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  domain           String       @unique
+  targetPort       Int          // Destination port in container
+  sslEnabled       Boolean      @default(true)
+  certificateArn   String?
+  autoRenew        Boolean      @default(true)
+  cnameVerified    Boolean      @default(false)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  certificates     Certificate[]
+
+  @@index([serviceId])
+}
+
+model Certificate {
+  id               String        @id @default(uuid())
+  serviceDomainId  String
+  serviceDomain    ServiceDomain @relation(fields: [serviceDomainId], references: [id], onDelete: Cascade)
+  fullChainPem     String
+  privateKeyPem    String        // Encrypted
+  issuer           String        @default("Let's Encrypt")
+  expiresAt        DateTime
+  lastRenewedAt    DateTime      @default(now())
+  createdAt        DateTime      @default(now())
+
+  @@index([serviceDomainId])
+}
+
+// -----------------------------------------------------------------------------
+// DEPLOYMENTS & REVISIONS
+// -----------------------------------------------------------------------------
+
+model Deployment {
+  id          String             @id @default(uuid())
+  serviceId   String
+  service     Service            @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  triggeredBy String?
+  status      DeploymentStatus   @default(QUEUED)
+  revisionId  String?
+  revision    DeploymentRevision? @relation(fields: [revisionId], references: [id])
+  logs        String?            @db.Text
+  errorReason String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime           @default(now())
+
+  @@index([serviceId])
+  @@index([status])
+}
+
+model DeploymentRevision {
+  id                String          @id @default(uuid())
+  templateVersionId String
+  templateVersion   TemplateVersion @relation(fields: [templateVersionId], references: [id])
+  dockerImage       String
+  startupCommand    String
+  envSnapshotJson   String          // Encrypted JSON
+  cpuLimitCores     Float
+  memoryLimitBytes  BigInt
+  createdAt         DateTime        @default(now())
+
+  deployments       Deployment[]
+}
+
+// -----------------------------------------------------------------------------
+// MANAGED DATABASES
+// -----------------------------------------------------------------------------
+
+model ManagedDatabase {
+  id               String         @id @default(uuid())
+  serviceId        String
+  service          Service        @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  databaseEngine   String         // "postgres", "mysql", "mongodb", "redis"
+  databaseName     String
+  connectionHost   String
+  connectionPort   Int
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  users            DatabaseUser[]
+
+  @@unique([serviceId, databaseName])
+}
+
+model DatabaseUser {
+  id                String          @id @default(uuid())
+  managedDatabaseId String
+  managedDatabase   ManagedDatabase @relation(fields: [managedDatabaseId], references: [id], onDelete: Cascade)
+  username          String
+  passwordHash      String
+  maxConnections    Int             @default(50)
+  createdAt         DateTime        @default(now())
+
+  @@unique([managedDatabaseId, username])
+}
+
+// -----------------------------------------------------------------------------
+// BACKUPS & RESTORATION
+// -----------------------------------------------------------------------------
+
+model Backup {
+  id               String          @id @default(uuid())
+  serviceId        String
+  service          Service         @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  name             String
+  storageProvider  StorageProvider @default(LOCAL)
+  storagePath      String          // S3 key or local file path
+  sizeBytes        BigInt          @default(0)
+  checksumSha256   String?
+  isEncrypted      Boolean         @default(true)
+  encryptionKeyId  String?
+  status           BackupStatus    @default(PENDING)
+  completedAt      DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime        @default(now())
+
+  restoreJobs      RestoreJob[]
+
+  @@index([serviceId])
+}
+
+model RestoreJob {
+  id          String           @id @default(uuid())
+  backupId    String
+  backup      Backup           @relation(fields: [backupId], references: [id], onDelete: Cascade)
+  status      DeploymentStatus @default(QUEUED)
+  errorReason String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime         @default(now())
+
+  @@index([backupId])
+}
+
+// -----------------------------------------------------------------------------
+// SCHEDULES & AUTOMATION
+// -----------------------------------------------------------------------------
+
+model Schedule {
+  id             String    @id @default(uuid())
+  serviceId      String
+  service        Service   @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  name           String
+  cronExpression String    // "0 4 * * *"
+  actionType     String    // "RESTART", "BACKUP", "COMMAND", "POWER_OFF"
+  actionPayload  String?   // JSON or text command
+  isEnabled      Boolean   @default(true)
+  lastRunAt      DateTime?
+  nextRunAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([serviceId])
+}
+
+// -----------------------------------------------------------------------------
+// ALERTS & NOTIFICATIONS
+// -----------------------------------------------------------------------------
+
+model AlertRule {
+  id          String   @id @default(uuid())
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  metricName  String   // "cpu_percent", "memory_bytes", "crash_loop", "disk_percent"
+  operator    String   // ">", "<", ">="
+  threshold   Float
+  durationSec Int      @default(60)
+  isEnabled   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  notifications Notification[]
+
+  @@index([serviceId])
+}
+
+model NotificationChannel {
+  id             String         @id @default(uuid())
+  organizationId String
+  type           String         // "DISCORD_WEBHOOK", "SLACK_WEBHOOK", "EMAIL", "TELEGRAM"
+  targetEndpoint String         // Webhook URL or recipient email
+  secretKey      String?
+  isEnabled      Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+
+  notifications  Notification[]
+}
+
+model Notification {
+  id          String               @id @default(uuid())
+  channelId   String
+  channel     NotificationChannel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  alertRuleId String?
+  alertRule   AlertRule?           @relation(fields: [alertRuleId], references: [id], onDelete: SetNull)
+  title       String
+  message     String               @db.Text
+  isDelivered Boolean              @default(false)
+  sentAt      DateTime             @default(now())
+
+  @@index([channelId])
+}
+
+// -----------------------------------------------------------------------------
+// FILES & AUDIT LOGS
+// -----------------------------------------------------------------------------
+
+model FileVersion {
+  id              String        @id @default(uuid())
+  serviceVolumeId String
+  serviceVolume   ServiceVolume @relation(fields: [serviceVolumeId], references: [id], onDelete: Cascade)
+  relativePath    String        // e.g. "config/server.properties"
+  fileSizeBytes   BigInt
+  contentHash     String
+  commitMessage   String?
+  savedByUserId   String?
+  createdAt       DateTime      @default(now())
+
+  @@index([serviceVolumeId, relativePath])
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  userId         String?
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organizationId String?
+  action         String   // e.g. "service.start", "user.login", "file.write"
+  resourceType   String   // "SERVICE", "NODE", "USER", "BILLING"
+  resourceId     String?
+  ipAddress      String?
+  userAgent      String?
+  changesJson    String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// BILLING, PLANS & USAGE (OPTIONAL SAAS LAYER)
+// -----------------------------------------------------------------------------
+
+model Plan {
+  id              String         @id @default(uuid())
+  name            String         @unique // "Starter", "Pro", "Dedicated Enterprise"
+  priceCentsMonth Int
+  maxCpuCores     Float
+  maxMemoryBytes  BigInt
+  maxDiskBytes    BigInt
+  maxServices     Int
+  maxBackups      Int
+  hasCustomDomain Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+
+  subscriptions   Subscription[]
+}
+
+model Subscription {
+  id             String       @id @default(uuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  planId         String
+  plan           Plan         @relation(fields: [planId], references: [id])
+  status         String       // "active", "past_due", "canceled"
+  currentPeriodEnd DateTime
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model Invoice {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  amountCents    Int
+  currency       String       @default("USD")
+  paidAt         DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+}

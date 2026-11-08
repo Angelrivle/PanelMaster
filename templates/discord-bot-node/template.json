@@ -1,0 +1,42 @@
+{
+  "name": "Discord Bot (Node.js)",
+  "slug": "discord-bot-node",
+  "category": "bots",
+  "type": "DISCORD_BOT",
+  "description": "Discord Bot runtime environment running Node.js 20 LTS with discord.js support.",
+  "version": "20-alpine",
+  "image": "node:20-alpine",
+  "startupCommand": "node index.js",
+  "stopCommand": "SIGINT",
+  "resources": {
+    "minCpuCores": 0.5,
+    "recommendedCpuCores": 1.0,
+    "minMemoryMb": 256,
+    "recommendedMemoryMb": 512,
+    "minDiskMb": 2048
+  },
+  "ports": [],
+  "volumes": [
+    {
+      "containerPath": "/data",
+      "description": "Bot source code, package.json and node_modules"
+    }
+  ],
+  "variables": [
+    {
+      "name": "DISCORD_TOKEN",
+      "displayName": "Discord Bot Token",
+      "description": "Bot secret token from Discord Developer Portal",
+      "defaultValue": "",
+      "required": true,
+      "isSecret": true
+    },
+    {
+      "name": "NODE_ENV",
+      "displayName": "Environment",
+      "description": "production or development",
+      "defaultValue": "production",
+      "required": false
+    }
+  ]
+}

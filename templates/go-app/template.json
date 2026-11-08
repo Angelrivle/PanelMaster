@@ -1,0 +1,39 @@
+{
+  "name": "Go Microservice (Fiber, Gin, Echo)",
+  "slug": "go-app",
+  "category": "web",
+  "type": "API_BACKEND",
+  "description": "Golang 1.22 high-performance runtime for microservices and APIs.",
+  "version": "1.22-alpine",
+  "image": "golang:1.22-alpine",
+  "startupCommand": "go run .",
+  "stopCommand": "SIGINT",
+  "resources": {
+    "minCpuCores": 0.5,
+    "recommendedCpuCores": 2.0,
+    "minMemoryMb": 256,
+    "recommendedMemoryMb": 1024,
+    "minDiskMb": 4096
+  },
+  "ports": [
+    {
+      "containerPort": 8080,
+      "protocol": "tcp",
+      "name": "Service Port"
+    }
+  ],
+  "volumes": [
+    {
+      "containerPath": "/app",
+      "description": "Go source files, go.mod and vendor"
+    }
+  ],
+  "variables": [
+    {
+      "name": "PORT",
+      "displayName": "Application Port",
+      "defaultValue": "8080",
+      "required": true
+    }
+  ]
+}

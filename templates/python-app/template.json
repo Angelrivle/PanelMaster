@@ -1,0 +1,45 @@
+{
+  "name": "Python App / API (FastAPI, Flask, Django)",
+  "slug": "python-app",
+  "category": "web",
+  "type": "API_BACKEND",
+  "description": "Python 3.12 modern backend runtime with Uvicorn, Gunicorn, and pip/poetry support.",
+  "version": "3.12-slim",
+  "image": "python:3.12-slim",
+  "startupCommand": "python main.py",
+  "stopCommand": "SIGINT",
+  "resources": {
+    "minCpuCores": 0.5,
+    "recommendedCpuCores": 2.0,
+    "minMemoryMb": 512,
+    "recommendedMemoryMb": 2048,
+    "minDiskMb": 5120
+  },
+  "ports": [
+    {
+      "containerPort": 8000,
+      "protocol": "tcp",
+      "name": "HTTP API Port"
+    }
+  ],
+  "volumes": [
+    {
+      "containerPath": "/app",
+      "description": "Application code, venv, and requirements.txt"
+    }
+  ],
+  "variables": [
+    {
+      "name": "PORT",
+      "displayName": "Listen Port",
+      "defaultValue": "8000",
+      "required": true
+    },
+    {
+      "name": "PYTHONUNBUFFERED",
+      "displayName": "Python Log Buffering",
+      "defaultValue": "1",
+      "required": false
+    }
+  ]
+}

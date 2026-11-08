@@ -1,0 +1,52 @@
+{
+  "name": "PostgreSQL Database Server",
+  "slug": "postgres-db",
+  "category": "databases",
+  "type": "DATABASE",
+  "description": "Enterprise SQL database engine with ACID compliance and jsonb support.",
+  "version": "16-alpine",
+  "image": "postgres:16-alpine",
+  "startupCommand": "docker-entrypoint.sh postgres",
+  "stopCommand": "SIGINT",
+  "resources": {
+    "minCpuCores": 1.0,
+    "recommendedCpuCores": 2.0,
+    "minMemoryMb": 1024,
+    "recommendedMemoryMb": 4096,
+    "minDiskMb": 10240
+  },
+  "ports": [
+    {
+      "containerPort": 5432,
+      "protocol": "tcp",
+      "name": "PostgreSQL Port"
+    }
+  ],
+  "volumes": [
+    {
+      "containerPath": "/var/lib/postgresql/data",
+      "description": "PostgreSQL data cluster"
+    }
+  ],
+  "variables": [
+    {
+      "name": "POSTGRES_USER",
+      "displayName": "Database User",
+      "defaultValue": "admin",
+      "required": true
+    },
+    {
+      "name": "POSTGRES_PASSWORD",
+      "displayName": "Database Password",
+      "defaultValue": "",
+      "required": true,
+      "isSecret": true
+    },
+    {
+      "name": "POSTGRES_DB",
+      "displayName": "Initial Database Name",
+      "defaultValue": "main",
+      "required": true
+    }
+  ]
+}

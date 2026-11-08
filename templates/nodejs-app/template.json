@@ -1,0 +1,45 @@
+{
+  "name": "Node.js Web App / API (Express / Fastify / Nest)",
+  "slug": "nodejs-app",
+  "category": "web",
+  "type": "API_BACKEND",
+  "description": "Node.js 20 LTS environment for REST APIs, GraphQL, and microservices.",
+  "version": "20-alpine",
+  "image": "node:20-alpine",
+  "startupCommand": "npm start",
+  "stopCommand": "SIGINT",
+  "resources": {
+    "minCpuCores": 0.5,
+    "recommendedCpuCores": 2.0,
+    "minMemoryMb": 512,
+    "recommendedMemoryMb": 2048,
+    "minDiskMb": 5120
+  },
+  "ports": [
+    {
+      "containerPort": 3000,
+      "protocol": "tcp",
+      "name": "App Port"
+    }
+  ],
+  "volumes": [
+    {
+      "containerPath": "/app",
+      "description": "Source code and dependencies"
+    }
+  ],
+  "variables": [
+    {
+      "name": "PORT",
+      "displayName": "Listen Port",
+      "defaultValue": "3000",
+      "required": true
+    },
+    {
+      "name": "NODE_ENV",
+      "displayName": "Node Environment",
+      "defaultValue": "production",
+      "required": false
+    }
+  ]
+}

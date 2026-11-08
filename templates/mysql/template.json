@@ -1,0 +1,59 @@
+{
+  "name": "MySQL / MariaDB Relational Database",
+  "slug": "mysql-db",
+  "category": "databases",
+  "type": "DATABASE",
+  "description": "Enterprise MariaDB 11 server with ACID compliance and InnoDB storage engine.",
+  "version": "11-alpine",
+  "image": "mariadb:11-alpine",
+  "startupCommand": "docker-entrypoint.sh mariadbd",
+  "stopCommand": "SIGTERM",
+  "resources": {
+    "minCpuCores": 1.0,
+    "recommendedCpuCores": 2.0,
+    "minMemoryMb": 1024,
+    "recommendedMemoryMb": 4096,
+    "minDiskMb": 10240
+  },
+  "ports": [
+    {
+      "containerPort": 3306,
+      "protocol": "tcp",
+      "name": "MySQL Port"
+    }
+  ],
+  "volumes": [
+    {
+      "containerPath": "/var/lib/mysql",
+      "description": "Database files and tables"
+    }
+  ],
+  "variables": [
+    {
+      "name": "MARIADB_ROOT_PASSWORD",
+      "displayName": "Root Password",
+      "defaultValue": "",
+      "required": true,
+      "isSecret": true
+    },
+    {
+      "name": "MARIADB_DATABASE",
+      "displayName": "Database Name",
+      "defaultValue": "nexus_db",
+      "required": true
+    },
+    {
+      "name": "MARIADB_USER",
+      "displayName": "Application User",
+      "defaultValue": "nexus_user",
+      "required": true
+    },
+    {
+      "name": "MARIADB_PASSWORD",
+      "displayName": "User Password",
+      "defaultValue": "",
+      "required": true,
+      "isSecret": true
+    }
+  ]
+}

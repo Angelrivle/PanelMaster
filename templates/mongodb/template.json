@@ -1,0 +1,52 @@
+{
+  "name": "MongoDB NoSQL Database",
+  "slug": "mongodb-server",
+  "category": "databases",
+  "type": "DATABASE",
+  "description": "Document-oriented NoSQL database with WiredTiger storage engine.",
+  "version": "7.0",
+  "image": "mongo:7.0",
+  "startupCommand": "docker-entrypoint.sh mongod --bind_ip_all",
+  "stopCommand": "SIGINT",
+  "resources": {
+    "minCpuCores": 1.0,
+    "recommendedCpuCores": 2.0,
+    "minMemoryMb": 1024,
+    "recommendedMemoryMb": 4096,
+    "minDiskMb": 10240
+  },
+  "ports": [
+    {
+      "containerPort": 27017,
+      "protocol": "tcp",
+      "name": "MongoDB Port"
+    }
+  ],
+  "volumes": [
+    {
+      "containerPath": "/data/db",
+      "description": "MongoDB collection storage"
+    }
+  ],
+  "variables": [
+    {
+      "name": "MONGO_INITDB_ROOT_USERNAME",
+      "displayName": "Root Admin User",
+      "defaultValue": "admin",
+      "required": true
+    },
+    {
+      "name": "MONGO_INITDB_ROOT_PASSWORD",
+      "displayName": "Root Admin Password",
+      "defaultValue": "",
+      "required": true,
+      "isSecret": true
+    },
+    {
+      "name": "MONGO_INITDB_DATABASE",
+      "displayName": "Initial Database",
+      "defaultValue": "nexus",
+      "required": true
+    }
+  ]
+}

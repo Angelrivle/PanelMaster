@@ -1,0 +1,41 @@
+{
+  "name": "Redis / Valkey Cache",
+  "slug": "redis-cache",
+  "category": "databases",
+  "type": "DATABASE",
+  "description": "Ultra fast in-memory key-value data store and cache engine.",
+  "version": "7-alpine",
+  "image": "redis:7-alpine",
+  "startupCommand": "redis-server --protected-mode no --appendonly yes",
+  "stopCommand": "SHUTDOWN",
+  "resources": {
+    "minCpuCores": 0.5,
+    "recommendedCpuCores": 1.0,
+    "minMemoryMb": 256,
+    "recommendedMemoryMb": 1024,
+    "minDiskMb": 2048
+  },
+  "ports": [
+    {
+      "containerPort": 6379,
+      "protocol": "tcp",
+      "name": "Redis Port"
+    }
+  ],
+  "volumes": [
+    {
+      "containerPath": "/data",
+      "description": "AOF and RDB persistence files"
+    }
+  ],
+  "variables": [
+    {
+      "name": "REDIS_PASSWORD",
+      "displayName": "Redis Requirepass",
+      "description": "Optional authentication password",
+      "defaultValue": "",
+      "required": false,
+      "isSecret": true
+    }
+  ]
+}
