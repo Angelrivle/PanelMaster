@@ -72,9 +72,10 @@ services:
       - "443:443"
       - "5173:80"
       - "5174:80"
+    environment:
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-panel.zenforge.online}
     volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ${SSL_CERTS_DIR:-./certs}:/etc/letsencrypt:ro
+      - ${SSL_CERTS_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
 
 volumes:
   pgdata:
