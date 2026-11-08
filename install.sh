@@ -65,9 +65,6 @@ PUBLIC_IP=$(curl -s4 https://api.ipify.org || curl -s4 https://icanhazip.com || 
 read -rp "$(echo -e "${CYAN}Ingresa el dominio o FQDN del panel [deja vacío para usar IP ${PUBLIC_IP}]: ${NC}")" PANEL_DOMAIN
 if [ -z "$PANEL_DOMAIN" ]; then
   PANEL_DOMAIN="${PUBLIC_IP}"
-  USE_SSL="n"
-else
-  read -rp "$(echo -e "${CYAN}¿Deseas generar certificados SSL automáticos con Let's Encrypt (Certbot)? [s/N]: ${NC}")" USE_SSL
 fi
 
 read -rp "$(echo -e "${CYAN}Correo del Administrador Inicial [admin@panelmaster.dev]: ${NC}")" ADMIN_EMAIL
@@ -110,7 +107,6 @@ if ! command -v docker &> /dev/null; then
     chmod a+r /etc/apt/keyrings/docker.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${OS_NAME} ${CODENAME} stable" > /etc/apt/sources.list.d/docker.list
     apt-get update -y -q
-    # Explicitly install packages, omitting obsolete or unsupported packages like docker-model-plugin
     apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || apt-get install -y -q docker.io docker-compose
   elif [[ "$OS_NAME" == "almalinux" || "$OS_NAME" == "rocky" || "$OS_NAME" == "centos" ]]; then
     dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo || true
@@ -145,7 +141,12 @@ echo -e "${CYAN}[3/6] Desplegando archivos de PanelMaster en ${INSTALL_DIR}...${
 
 mkdir -p "${INSTALL_DIR}"
 
-if [ ! -f "${INSTALL_DIR}/docker-compose.yml" ]; then
+if [ -d "${INSTALL_DIR}/.git" ]; then
+  echo -e "${YELLOW}[*] Sincronizando con la última versión de GitHub...${NC}"
+  cd "${INSTALL_DIR}"
+  git fetch --all -q
+  git reset --hard origin/main -q
+else
   echo -e "${YELLOW}[*] Descargando archivos de PanelMaster desde GitHub...${NC}"
   rm -rf /tmp/panelmaster-repo
   git clone https://github.com/Angelrivle/PanelMaster.git /tmp/panelmaster-repo
@@ -155,7 +156,7 @@ fi
 
 cd "${INSTALL_DIR}"
 
-# 7. Generate Random Secrets
+# 7. Generate Random Secrets & Configure .env
 echo -e "${CYAN}[4/6] Generando claves criptográficas y archivo .env...${NC}"
 
 JWT_SECRET=$(openssl rand -hex 32)
@@ -170,6 +171,7 @@ cat > "${INSTALL_DIR}/.env" << EOF
 NODE_ENV=production
 HOST=0.0.0.0
 PORT=3000
+WEB_PORT=${WEB_PORT}
 
 # Security & Tokens
 JWT_SECRET=${JWT_SECRET}
@@ -200,38 +202,48 @@ SMTP_FROM_NAME=PanelMaster
 SMTP_FROM_EMAIL=onboarding@resend.dev
 EOF
 
-# 8. Firewall configuration
-echo -e "${CYAN}[5/6] Configurando reglas de firewall...${NC}"
+# 8. Firewall & Host Port Conflict Prevention
+echo -e "${CYAN}[5/6] Verificando puertos y configurando reglas de firewall...${NC}"
+
+# Stop any native host webservers (Apache, etc.) that might occupy port 80
+systemctl stop apache2 >/dev/null 2>&1 || true
+systemctl disable apache2 >/dev/null 2>&1 || true
+
 if command -v ufw &> /dev/null; then
   ufw allow 22/tcp >/dev/null 2>&1 || true
+  ufw allow 80/tcp >/dev/null 2>&1 || true
   ufw allow "${WEB_PORT}"/tcp >/dev/null 2>&1 || true
   ufw allow 443/tcp >/dev/null 2>&1 || true
   ufw allow 3000/tcp >/dev/null 2>&1 || true
+  ufw allow 5173/tcp >/dev/null 2>&1 || true
   ufw allow 25565/tcp >/dev/null 2>&1 || true
   ufw --force enable >/dev/null 2>&1 || true
 elif command -v firewall-cmd &> /dev/null; then
+  firewall-cmd --permanent --add-port=80/tcp >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port="${WEB_PORT}"/tcp >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port=443/tcp >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port=3000/tcp >/dev/null 2>&1 || true
+  firewall-cmd --permanent --add-port=5173/tcp >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port=25565/tcp >/dev/null 2>&1 || true
   firewall-cmd --reload >/dev/null 2>&1 || true
 fi
 
 # 9. Build & Start Containers
-echo -e "${CYAN}[6/6] Iniciando microservicios con Docker Compose...${NC}"
+echo -e "${CYAN}[6/6] Compilando e iniciando microservicios con Docker Compose...${NC}"
 cd "${INSTALL_DIR}"
 
-if docker compose version &>/dev/null; then
-  docker compose down --remove-orphans >/dev/null 2>&1 || true
-  docker compose up -d --build
-  sleep 10
-  docker compose exec -T api npx prisma db push --accept-data-loss || true
-else
-  docker-compose down --remove-orphans >/dev/null 2>&1 || true
-  docker-compose up -d --build
-  sleep 10
-  docker-compose exec -T api npx prisma db push --accept-data-loss || true
-fi
+docker compose down --remove-orphans >/dev/null 2>&1 || docker-compose down --remove-orphans >/dev/null 2>&1 || true
+docker compose build || docker-compose build
+docker compose up -d || docker-compose up -d
+
+echo -e "${YELLOW}[*] Esperando inicialización de PostgreSQL y servicios...${NC}"
+sleep 10
+
+# Push database schema & seed initial administrator
+echo -e "${YELLOW}[*] Sincronizando base de datos y creando usuario administrador...${NC}"
+docker compose exec -T api npx prisma db push --accept-data-loss || docker-compose exec -T api npx prisma db push --accept-data-loss || true
+# Restart api to ensure initial admin creation with database tables ready
+docker compose restart api || docker-compose restart api || true
 
 # Summary & Output
 clear

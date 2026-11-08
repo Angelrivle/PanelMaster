@@ -10,10 +10,52 @@ import { servicesRoutes } from './routes/services.routes';
 import { nodesRoutes } from './routes/nodes.routes';
 import { templatesRoutes } from './routes/templates.routes';
 import { mailRoutes } from './routes/mail.routes';
+import bcrypt from 'bcryptjs';
+import { prisma } from './prisma';
 
 declare module 'fastify' {
   interface FastifyInstance {
     authenticate: typeof authenticate;
+  }
+}
+
+async function ensureInitialAdmin() {
+  const adminEmail = process.env.INITIAL_ADMIN_EMAIL?.trim();
+  const adminPassword = process.env.INITIAL_ADMIN_PASSWORD?.trim();
+  if (!adminEmail || !adminPassword) return;
+
+  try {
+    const existing = await prisma.user.findFirst({
+      where: { email: adminEmail },
+    });
+    if (!existing) {
+      const passwordHash = await bcrypt.hash(adminPassword, 12);
+      const user = await prisma.user.create({
+        data: {
+          email: adminEmail,
+          username: adminEmail.split('@')[0],
+          passwordHash,
+          isSuperAdmin: true,
+          isEmailVerified: true,
+        },
+      });
+
+      await prisma.organization.create({
+        data: {
+          name: 'PanelMaster Cloud',
+          slug: 'panelmaster-root',
+          memberships: {
+            create: {
+              userId: user.id,
+              role: 'ORGANIZATION_OWNER',
+            },
+          },
+        },
+      });
+      console.log(`[SEED] Initial Administrator user created: ${adminEmail}`);
+    }
+  } catch (err: any) {
+    console.error(`[SEED] Notice on initial admin: ${err.message}`);
   }
 }
 
@@ -52,6 +94,9 @@ async function bootstrap() {
   app.register(nodesRoutes, { prefix: '/api/v1/nodes' });
   app.register(templatesRoutes, { prefix: '/api/v1/templates' });
   app.register(mailRoutes, { prefix: '/api/v1/mail' });
+
+  // Seed initial administrator if provided in environment
+  await ensureInitialAdmin();
 
   try {
     await app.listen({ port: config.port, host: config.host });
