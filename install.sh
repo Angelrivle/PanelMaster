@@ -65,6 +65,10 @@ PUBLIC_IP=$(curl -s4 https://api.ipify.org || curl -s4 https://icanhazip.com || 
 read -rp "$(echo -e "${CYAN}Ingresa el dominio o FQDN del panel [deja vacío para usar IP ${PUBLIC_IP}]: ${NC}")" PANEL_DOMAIN
 if [ -z "$PANEL_DOMAIN" ]; then
   PANEL_DOMAIN="${PUBLIC_IP}"
+  ENABLE_SSL="n"
+else
+  read -rp "$(echo -e "${CYAN}¿Deseas configurar SSL / HTTPS automático con Let's Encrypt? [S/n]: ${NC}")" ENABLE_SSL
+  ENABLE_SSL=${ENABLE_SSL:-s}
 fi
 
 read -rp "$(echo -e "${CYAN}Correo del Administrador Inicial [admin@panelmaster.dev]: ${NC}")" ADMIN_EMAIL
@@ -245,6 +249,16 @@ docker compose exec -T api npx prisma db push --accept-data-loss || docker-compo
 # Restart api to ensure initial admin creation with database tables ready
 docker compose restart api || docker-compose restart api || true
 
+PANEL_PROTOCOL="http"
+if [[ "${ENABLE_SSL,,}" == "s" || "${ENABLE_SSL,,}" == "y" || "${ENABLE_SSL,,}" == "si" ]]; then
+  echo -e "${YELLOW}[*] Configurando certificado SSL / HTTPS con Let's Encrypt...${NC}"
+  chmod +x ./ssl.sh
+  ./ssl.sh "${PANEL_DOMAIN}" "${ADMIN_EMAIL}" || echo -e "${YELLOW}[!] Podrás reintentar configurar SSL en cualquier momento ejecutando 'bash ssl.sh'${NC}"
+  if [ -f "/etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem" ]; then
+    PANEL_PROTOCOL="https"
+  fi
+fi
+
 # Summary & Output
 clear
 echo -e "${GREEN}${BOLD}"
@@ -255,10 +269,10 @@ cat << "EOF"
 EOF
 echo -e "${NC}"
 echo -e "${BOLD}Accede a tu panel en:${NC}"
-if [[ "$WEB_PORT" == "80" ]]; then
-  echo -e "  ${CYAN}${BOLD}http://${PANEL_DOMAIN}${NC}"
+if [[ "$WEB_PORT" == "80" || "$PANEL_PROTOCOL" == "https" ]]; then
+  echo -e "  ${CYAN}${BOLD}${PANEL_PROTOCOL}://${PANEL_DOMAIN}${NC}"
 else
-  echo -e "  ${CYAN}${BOLD}http://${PANEL_DOMAIN}:${WEB_PORT}${NC}"
+  echo -e "  ${CYAN}${BOLD}${PANEL_PROTOCOL}://${PANEL_DOMAIN}:${WEB_PORT}${NC}"
 fi
 echo ""
 echo -e "${BOLD}Credenciales del Administrador Principal:${NC}"
@@ -266,10 +280,11 @@ echo -e "  Correo:     ${YELLOW}${ADMIN_EMAIL}${NC}"
 echo -e "  Contraseña: ${YELLOW}${ADMIN_PASSWORD}${NC}"
 echo ""
 echo -e "${BOLD}Archivos y Control del Panel:${NC}"
-echo -e "  Directorio: ${CYAN}${INSTALL_DIR}${NC}"
-echo -e "  Ver logs:   ${CYAN}cd ${INSTALL_DIR} && docker compose logs -f${NC}"
-echo -e "  Reiniciar:  ${CYAN}cd ${INSTALL_DIR} && docker compose restart${NC}"
-echo -e "  Actualizar: ${CYAN}cd ${INSTALL_DIR} && bash update.sh${NC}"
+echo -e "  Directorio:    ${CYAN}${INSTALL_DIR}${NC}"
+echo -e "  Ver logs:      ${CYAN}cd ${INSTALL_DIR} && docker compose logs -f${NC}"
+echo -e "  Reiniciar:     ${CYAN}cd ${INSTALL_DIR} && docker compose restart${NC}"
+echo -e "  Actualizar:    ${CYAN}cd ${INSTALL_DIR} && bash update.sh${NC}"
+echo -e "  Configurar SSL:${CYAN}cd ${INSTALL_DIR} && bash ssl.sh${NC}"
 echo ""
 echo -e "${GREEN}Guarda estas credenciales en un lugar seguro.${NC}"
 echo -e "${BLUE}==============================================================${NC}"
