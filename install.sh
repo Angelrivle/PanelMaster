@@ -160,12 +160,18 @@ fi
 
 cd "${INSTALL_DIR}"
 
-# 7. Generate Random Secrets & Configure .env
-echo -e "${CYAN}[4/6] Generando claves criptográficas y archivo .env...${NC}"
+# 7. Generate or Preserve Secrets & Configure .env
+echo -e "${CYAN}[4/6] Configurando variables de entorno (.env)...${NC}"
 
-JWT_SECRET=$(openssl rand -hex 32)
-POSTGRES_PASSWORD=$(openssl rand -hex 16)
-MASTER_ENCRYPTION_KEY=$(openssl rand -hex 16) # 32 chars
+if [ -f "${INSTALL_DIR}/.env" ]; then
+  EXISTING_POSTGRES_PW=$(grep '^POSTGRES_PASSWORD=' "${INSTALL_DIR}/.env" | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+  EXISTING_JWT_SEC=$(grep '^JWT_SECRET=' "${INSTALL_DIR}/.env" | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+  EXISTING_ENC_KEY=$(grep '^MASTER_ENCRYPTION_KEY=' "${INSTALL_DIR}/.env" | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+fi
+
+JWT_SECRET="${EXISTING_JWT_SEC:-$(openssl rand -hex 32)}"
+POSTGRES_PASSWORD="${EXISTING_POSTGRES_PW:-$(openssl rand -hex 16)}"
+MASTER_ENCRYPTION_KEY="${EXISTING_ENC_KEY:-$(openssl rand -hex 16)}"
 
 cat > "${INSTALL_DIR}/.env" << EOF
 # ==============================================================================
