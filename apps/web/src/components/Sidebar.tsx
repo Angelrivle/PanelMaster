@@ -209,9 +209,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         } border-r border-[#1f1f23] bg-[#09090b] flex flex-col justify-between select-none shrink-0 h-full transition-[width] duration-200 overflow-hidden z-20`}
       >
         <div className="p-3 space-y-4 overflow-y-auto no-scrollbar flex-1">
-          {/* Header: ONLY TEXT "PANELMASTER" + TOP COLLAPSE BUTTON ONLY */}
+          {/* Header: LOGO + TEXT "PANELMASTER" + TOP COLLAPSE BUTTON ONLY */}
           {isCollapsed ? (
-            <div className="flex justify-center pb-2 border-b border-[#1f1f23]">
+            <div className="flex flex-col items-center gap-2 pb-2 border-b border-[#1f1f23]">
+              <img src="/logo.png" className="w-5 h-5 object-contain" alt="PanelMaster" />
               <button
                 onClick={toggleCollapse}
                 title={isEs ? 'Expandir barra lateral' : 'Expand sidebar'}
@@ -222,9 +223,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           ) : (
             <div className="flex items-center justify-between pb-2 border-b border-[#1f1f23] px-1">
-              <span className="font-extrabold text-xs tracking-widest text-zinc-100 uppercase font-mono">
-                PANELMASTER
-              </span>
+              <div className="flex items-center gap-2">
+                <img src="/logo.png" className="w-5 h-5 object-contain" alt="PanelMaster" />
+                <span className="font-extrabold text-xs tracking-widest text-zinc-100 uppercase font-mono">
+                  PANELMASTER
+                </span>
+              </div>
               <button
                 onClick={toggleCollapse}
                 title={isEs ? 'Colapsar barra lateral' : 'Collapse sidebar'}
