@@ -24,5 +24,6 @@ docker compose up -d --remove-orphans
 echo -e "${YELLOW}[*] Sincronizando esquema de base de datos...${NC}"
 sleep 4
 docker compose exec -T api npx prisma db push || true
+docker compose restart api || true
 
 echo -e "${GREEN}${BOLD}[✓] ¡PanelMaster ha sido actualizado exitosamente!${NC}"
