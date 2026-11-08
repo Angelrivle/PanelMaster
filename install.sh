@@ -46,12 +46,14 @@ if [ -f /etc/os-release ]; then
   . /etc/os-release
   OS_NAME=$ID
   OS_VERSION=$VERSION_ID
+  CODENAME=$VERSION_CODENAME
+  [ -z "$CODENAME" ] && CODENAME=$(echo "$VERSION" | grep -oP '\(\K[^\)]+' || echo "focal")
 else
   echo -e "${RED}[ERROR] No se pudo determinar la distribución de Linux.${NC}"
   exit 1
 fi
 
-echo -e "${GREEN}[✓] Sistema detectado: ${OS_NAME} ${OS_VERSION}${NC}"
+echo -e "${GREEN}[✓] Sistema detectado: ${OS_NAME} ${OS_VERSION} (${CODENAME})${NC}"
 echo ""
 
 # 3. Interactive Setup Prompts
@@ -92,39 +94,66 @@ echo -e "${CYAN}[1/6] Actualizando paquetes del sistema e instalando herramienta
 if [[ "$OS_NAME" == "ubuntu" || "$OS_NAME" == "debian" ]]; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y -q
-  apt-get install -y -q curl wget git openssl jq tar ufw ca-certificates gnupg lsb-release
+  apt-get install -y -q curl wget git openssl jq tar ufw ca-certificates gnupg lsb-release apt-transport-https
 elif [[ "$OS_NAME" == "almalinux" || "$OS_NAME" == "rocky" || "$OS_NAME" == "centos" ]]; then
   yum install -y -q curl wget git openssl jq tar firewalld ca-certificates
 fi
 
-# 5. Docker & Docker Compose Installation
+# 5. Docker & Docker Compose Installation (Focal/Jammy/Noble/Debian compatible)
 echo -e "${CYAN}[2/6] Verificando e instalando Docker Engine y Docker Compose Plugin...${NC}"
 
 if ! command -v docker &> /dev/null; then
-  echo -e "${YELLOW}[*] Instalando Docker oficial...${NC}"
-  curl -fsSL https://get.docker.com | sh
-  systemctl enable --now docker
+  echo -e "${YELLOW}[*] Configurando repositorio oficial de Docker...${NC}"
+  if [[ "$OS_NAME" == "ubuntu" || "$OS_NAME" == "debian" ]]; then
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL "https://download.docker.com/linux/${OS_NAME}/gpg" | gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${OS_NAME} ${CODENAME} stable" > /etc/apt/sources.list.d/docker.list
+    apt-get update -y -q
+    # Explicitly install packages, omitting obsolete or unsupported packages like docker-model-plugin
+    apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || apt-get install -y -q docker.io docker-compose
+  elif [[ "$OS_NAME" == "almalinux" || "$OS_NAME" == "rocky" || "$OS_NAME" == "centos" ]]; then
+    dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo || true
+    dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || dnf install -y docker docker-compose
+  else
+    curl -fsSL https://get.docker.com | sh || true
+  fi
+  systemctl enable --now docker || service docker start || true
 else
   echo -e "${GREEN}[✓] Docker ya está instalado ($(docker --version))${NC}"
+fi
+
+# Ensure docker compose CLI is functional
+if ! docker compose version &> /dev/null; then
+  echo -e "${YELLOW}[*] Instalando plugin Docker Compose v2...${NC}"
+  DOCKER_CLI_DIR="/usr/local/lib/docker/cli-plugins"
+  mkdir -p "${DOCKER_CLI_DIR}"
+  ARCH=$(uname -m)
+  case "$ARCH" in
+    x86_64) COMPOSE_ARCH="x86_64" ;;
+    aarch64) COMPOSE_ARCH="aarch64" ;;
+    armv7l) COMPOSE_ARCH="armv7" ;;
+    *) COMPOSE_ARCH="x86_64" ;;
+  esac
+  curl -SL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-${COMPOSE_ARCH}" -o "${DOCKER_CLI_DIR}/docker-compose"
+  chmod +x "${DOCKER_CLI_DIR}/docker-compose"
+  ln -sf "${DOCKER_CLI_DIR}/docker-compose" /usr/local/bin/docker-compose || true
 fi
 
 # 6. Cloning/Preparing Files
 echo -e "${CYAN}[3/6] Desplegando archivos de PanelMaster en ${INSTALL_DIR}...${NC}"
 
 mkdir -p "${INSTALL_DIR}"
-cd "${INSTALL_DIR}"
 
-if [ ! -f "docker-compose.yml" ]; then
-  if command -v git &> /dev/null && [ ! -d ".git" ]; then
-    echo -e "${YELLOW}[*] Clonando repositorio PanelMaster...${NC}"
-    # Si existe en el directorio local actual se copia, de lo contrario clona
-    if [ -f "$(pwd)/docker-compose.yml" ]; then
-      cp -r "$(pwd)/." "${INSTALL_DIR}/"
-    else
-      git clone https://github.com/Angelrivle/PanelMaster.git "${INSTALL_DIR}" || true
-    fi
-  fi
+if [ ! -f "${INSTALL_DIR}/docker-compose.yml" ]; then
+  echo -e "${YELLOW}[*] Descargando archivos de PanelMaster desde GitHub...${NC}"
+  rm -rf /tmp/panelmaster-repo
+  git clone https://github.com/Angelrivle/PanelMaster.git /tmp/panelmaster-repo
+  cp -rf /tmp/panelmaster-repo/. "${INSTALL_DIR}/"
+  rm -rf /tmp/panelmaster-repo
 fi
+
+cd "${INSTALL_DIR}"
 
 # 7. Generate Random Secrets
 echo -e "${CYAN}[4/6] Generando claves criptográficas y archivo .env...${NC}"
@@ -190,15 +219,19 @@ fi
 
 # 9. Build & Start Containers
 echo -e "${CYAN}[6/6] Iniciando microservicios con Docker Compose...${NC}"
-docker compose down --remove-orphans >/dev/null 2>&1 || true
-docker compose up -d --build
+cd "${INSTALL_DIR}"
 
-# Wait for database health
-echo -e "${YELLOW}[*] Esperando inicialización de base de datos PostgreSQL...${NC}"
-sleep 8
-
-# Run migrations
-docker compose exec -T api npx prisma db push --accept-data-loss || true
+if docker compose version &>/dev/null; then
+  docker compose down --remove-orphans >/dev/null 2>&1 || true
+  docker compose up -d --build
+  sleep 10
+  docker compose exec -T api npx prisma db push --accept-data-loss || true
+else
+  docker-compose down --remove-orphans >/dev/null 2>&1 || true
+  docker-compose up -d --build
+  sleep 10
+  docker-compose exec -T api npx prisma db push --accept-data-loss || true
+fi
 
 # Summary & Output
 clear
