@@ -90,6 +90,15 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
       ws.onmessage = (event) => {
         if (!isMounted) return;
         const text = typeof event.data === 'string' ? event.data : '';
+
+        if (text.includes('El servidor se encuentra apagado') || text.includes('Servidor detenido') || text.includes('detenido.')) {
+          setIsOnline(false);
+          onStatusChange?.('STOPPED');
+        } else if (text.includes('Iniciando') || text.includes('Done (') || text.includes('Starting Minecraft') || text.includes('Listening on')) {
+          setIsOnline(true);
+          onStatusChange?.('RUNNING');
+        }
+
         // Normalize line endings for xterm so lines don't stair-step horizontally
         const formatted = text.replace(/\r?\n/g, '\r\n');
         term.write(formatted);

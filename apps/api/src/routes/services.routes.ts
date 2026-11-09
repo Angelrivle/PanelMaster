@@ -856,12 +856,22 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     } else if (action === 'KILL') {
       if (container) await dockerService.killContainer(container.Id);
     } else if (action === 'START' || action === 'RESTART') {
-      // Recreate container to always apply latest config, variables, and Java versions
-      await dockerService.createServiceContainer({
-        serviceId: id,
-        name: id,
-        startNow: true,
-      });
+      if (container && container.State !== 'running') {
+        const started = await dockerService.startContainer(container.Id);
+        if (!started) {
+          await dockerService.createServiceContainer({
+            serviceId: id,
+            name: id,
+            startNow: true,
+          });
+        }
+      } else {
+        await dockerService.createServiceContainer({
+          serviceId: id,
+          name: id,
+          startNow: true,
+        });
+      }
     }
 
     return reply.send({ success: true, action, status: nextStatus });
@@ -989,16 +999,26 @@ export async function servicesRoutes(fastify: FastifyInstance) {
       // Power actions: START, STOP, RESTART, KILL
       if (raw.startsWith('__ACTION__:')) {
         const act = raw.replace('__ACTION__:', '');
-        stopActiveStream();
 
         if (act === 'START' || act === 'RESTART') {
+          stopActiveStream();
           if (wsClient.readyState === WebSocket.OPEN) {
-            wsClient.send(`\r\n\x1b[36m[PanelMaster] ${act === 'START' ? 'Iniciando' : 'Reiniciando'} servidor...\x1b[0m\r\n`);
+            wsClient.send(`\r\n\x1b[36m[PanelMaster]\x1b[0m ${act === 'START' ? 'Iniciando' : 'Reiniciando'} servidor...\r\n`);
           }
           await prisma.service.updateMany({ where: { id }, data: { status: 'RUNNING' } });
           await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'RUNNING' } });
 
-          // Always ensure the container is cleanly created or restarted with latest config
+          // Fast-start existing stopped container if possible
+          let cur = await dockerService.findContainerByName(containerName);
+          if (cur && cur.State !== 'running') {
+            const started = await dockerService.startContainer(cur.Id);
+            if (started) {
+              attachLogs(cur.Id);
+              return;
+            }
+          }
+
+          // Otherwise recreate/create container with latest settings
           const container = await dockerService.createServiceContainer({
             serviceId: id,
             name: srvName,
@@ -1016,18 +1036,27 @@ export async function servicesRoutes(fastify: FastifyInstance) {
           }
         } else if (act === 'STOP') {
           if (wsClient.readyState === WebSocket.OPEN) {
-            wsClient.send('\r\n\x1b[33m[PanelMaster] Deteniendo servidor (guardando estado del mundo)...\x1b[0m\r\n');
+            wsClient.send('\r\n\x1b[33m[PanelMaster]\x1b[0m Enviando señal de apagado seguro (guardando chunks y estado del mundo)...\r\n');
           }
           await prisma.service.updateMany({ where: { id }, data: { status: 'STOPPED' } });
           await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'STOPPED' } });
 
           const cur = await dockerService.findContainerByName(containerName);
           if (cur) {
+            try {
+              await dockerService.execCommand(cur.Id, 'stop');
+            } catch {}
             await dockerService.stopContainer(cur.Id);
           }
-        } else if (act === 'KILL') {
+          stopActiveStream();
           if (wsClient.readyState === WebSocket.OPEN) {
-            wsClient.send('\r\n\x1b[31m[PanelMaster] Detención forzada inmediata (KILL)...\x1b[0m\r\n');
+            wsClient.send('\r\n\x1b[32m[PanelMaster] ✔ Servidor detenido y apagado correctamente.\x1b[0m\r\n');
+            wsClient.send('\x1b[33m[PanelMaster] El servidor se encuentra apagado. Pulsa "Iniciar" para encenderlo.\x1b[0m\r\n');
+          }
+        } else if (act === 'KILL') {
+          stopActiveStream();
+          if (wsClient.readyState === WebSocket.OPEN) {
+            wsClient.send('\r\n\x1b[31m[PanelMaster]\x1b[0m Detención forzada inmediata (SIGKILL)...\r\n');
           }
           await prisma.service.updateMany({ where: { id }, data: { status: 'STOPPED' } });
           await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'STOPPED' } });
@@ -1035,6 +1064,10 @@ export async function servicesRoutes(fastify: FastifyInstance) {
           const cur = await dockerService.findContainerByName(containerName);
           if (cur) {
             await dockerService.killContainer(cur.Id);
+          }
+          if (wsClient.readyState === WebSocket.OPEN) {
+            wsClient.send('\r\n\x1b[31m[PanelMaster] ✔ Proceso terminado forzosamente. El servidor está apagado.\x1b[0m\r\n');
+            wsClient.send('\x1b[33m[PanelMaster] El servidor se encuentra apagado. Pulsa "Iniciar" para encenderlo.\x1b[0m\r\n');
           }
         }
         return;
