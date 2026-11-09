@@ -56,6 +56,9 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM_NAME: ${SMTP_FROM_NAME:-PanelMaster}
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-onboarding@resend.dev}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/panelmaster/volumes:/var/lib/nexuspanel/volumes
     ports:
       - "3000:3000"
 

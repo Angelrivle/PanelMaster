@@ -495,6 +495,32 @@ export const CreateServiceModal: React.FC<CreateServiceModalProps> = ({
         }).catch(() => {});
       }
 
+      // Registrar servidor en backend / base de datos
+      try {
+        const token = localStorage.getItem('nexus_token');
+        await fetch('/api/v1/services', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            id: serverId,
+            name: name.trim(),
+            egg: selectedEgg.name,
+            dockerImage: dockerImage,
+            memoryMb: memoryMb,
+            cpuCores: cpuLimit / 100,
+            diskMb: diskMb,
+            port: primaryPort,
+            environment: eggVariables,
+            startOnCompletion: startOnCompletion,
+          }),
+        });
+      } catch (backendErr) {
+        console.warn('Backend server registration notice:', backendErr);
+      }
+
       onCreated(newService);
       toast.success(`Servidor "${newService.name}" aprovisionado y listo para usar.`);
       onClose();

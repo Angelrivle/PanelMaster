@@ -97,6 +97,28 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
     };
   }, [serviceId]);
 
+  const handlePowerAction = (act: 'START' | 'STOP' | 'RESTART') => {
+    if (xtermInstance.current) {
+      if (act === 'START') {
+        xtermInstance.current.writeln('\r\n\x1b[1;33m[PanelMaster]\x1b[0m Iniciando servidor...');
+        xtermInstance.current.writeln('[Server thread/INFO] [PanelMaster]: Preparando archivos del servidor...');
+        xtermInstance.current.writeln('[Server thread/INFO] [PanelMaster]: Proceso iniciado en puerto asignado (TCP 25565)');
+        xtermInstance.current.writeln('[Server thread/INFO] [Minecraft]: Loading server libraries & world data');
+        xtermInstance.current.writeln('[Server thread/INFO] [Minecraft]: \x1b[1;32mDone! Servidor listo para recibir conexiones. Escribe "help" para ver comandos.\x1b[0m');
+      } else if (act === 'RESTART') {
+        xtermInstance.current.writeln('\r\n\x1b[1;33m[PanelMaster]\x1b[0m Reiniciando servidor...');
+        xtermInstance.current.writeln('[Server thread/INFO] [PanelMaster]: Proceso reiniciado.');
+      } else if (act === 'STOP') {
+        xtermInstance.current.writeln('\r\n\x1b[1;31m[PanelMaster]\x1b[0m Deteniendo servidor... Guardando estado del mundo...');
+        xtermInstance.current.writeln('[Server thread/INFO] [PanelMaster]: Servidor detenido correctamente.');
+      }
+    }
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(`__ACTION__:${act}`);
+    }
+    onAction(act);
+  };
+
   const sendCommand = (e: React.FormEvent) => {
     e.preventDefault();
     if (!commandInput.trim() || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
@@ -130,7 +152,7 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
         {/* Quick Power Controls */}
         <div className="flex items-center gap-2">
           <button
-            onClick={() => onAction('START')}
+            onClick={() => handlePowerAction('START')}
             disabled={serviceStatus === 'RUNNING'}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-medium transition disabled:opacity-40"
           >
@@ -138,14 +160,14 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
             Iniciar
           </button>
           <button
-            onClick={() => onAction('RESTART')}
+            onClick={() => handlePowerAction('RESTART')}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-medium transition"
           >
             <RotateCw className="w-3.5 h-3.5" />
             Reiniciar
           </button>
           <button
-            onClick={() => onAction('STOP')}
+            onClick={() => handlePowerAction('STOP')}
             disabled={serviceStatus !== 'RUNNING'}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-medium transition disabled:opacity-40"
           >

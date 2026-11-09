@@ -139,13 +139,10 @@ export const Login: React.FC<LoginProps> = ({
       </div>
 
       <div className="w-full max-w-[420px] my-auto">
-        {/* Title & Brand Logo */}
-        <div className="flex flex-col items-center justify-center mb-8">
-          <img src="/logo.png" className="w-14 h-14 object-contain mb-3 drop-shadow-md" alt="PanelMaster Logo" />
-          <h1 className="text-2xl font-bold text-center text-white tracking-tight">
-            {isRegister ? t.signUpTitle : t.signInTitle}
-          </h1>
-        </div>
+        {/* Title */}
+        <h1 className="text-2xl font-bold text-center text-white mb-8 tracking-tight">
+          {isRegister ? t.signUpTitle : t.signInTitle}
+        </h1>
 
         {/* OAuth Buttons: Google & Discord (Cloudflare style) */}
         <div className="grid grid-cols-2 gap-3 mb-6">

@@ -316,36 +316,94 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // 5. NODOS (List & Pterodactyl-Style Edit View)
   // ==========================================
   const [nodesSearch, setNodesSearch] = useState('');
-  const [nodesList, setNodesList] = useState<NodeItem[]>([
-    {
-      id: 'node-01',
-      name: 'node-01',
-      description: 'Nodo maestro primario Docker local',
-      location: 'Lima (pe-1)',
-      fqdn: '127.0.0.1',
-      ssl: 'http',
-      allowAutoAllocation: true,
-      behindProxy: false,
-      maintenanceMode: false,
-      totalMemoryMb: 32768,
-      memoryOverallocatePercent: 0,
-      diskSpaceMb: 256000,
-      diskOverallocatePercent: 0,
-      maxUploadFilesizeMb: 100,
-      daemonPort: 8080,
-      daemonSftpPort: 2022,
-      daemonBasePath: '/var/lib/panelmaster/volumes',
-      cpuCores: 8,
-      cpuUsage: '2.8%',
-      status: 'ONLINE',
-      allocations: [
-        { id: 'alloc-1', ip: '127.0.0.1', port: 25565, alias: 'play.panelmaster.local', serverName: 'survival-production' },
-        { id: 'alloc-2', ip: '127.0.0.1', port: 25566, alias: '' },
-        { id: 'alloc-3', ip: '127.0.0.1', port: 25567, alias: '' },
-        { id: 'alloc-4', ip: '127.0.0.1', port: 8081, alias: '' },
-      ],
-    },
-  ]);
+  const [nodesList, setNodesList] = useState<NodeItem[]>(() => {
+    const cached = localStorage.getItem('pm_nodes_cache');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {}
+    }
+    return [
+      {
+        id: 'node-01',
+        name: 'node-01',
+        description: 'Nodo maestro primario Docker local',
+        location: 'Lima (pe-1)',
+        fqdn: '127.0.0.1',
+        ssl: 'http',
+        allowAutoAllocation: true,
+        behindProxy: false,
+        maintenanceMode: false,
+        totalMemoryMb: 32768,
+        memoryOverallocatePercent: 0,
+        diskSpaceMb: 256000,
+        diskOverallocatePercent: 0,
+        maxUploadFilesizeMb: 100,
+        daemonPort: 8080,
+        daemonSftpPort: 2022,
+        daemonBasePath: '/var/lib/panelmaster/volumes',
+        cpuCores: 8,
+        cpuUsage: '2.8%',
+        status: 'ONLINE',
+        allocations: [
+          { id: 'alloc-1', ip: '127.0.0.1', port: 25565, alias: 'play.panelmaster.local', serverName: 'survival-production' },
+          { id: 'alloc-2', ip: '127.0.0.1', port: 25566, alias: '' },
+          { id: 'alloc-3', ip: '127.0.0.1', port: 25567, alias: '' },
+          { id: 'alloc-4', ip: '127.0.0.1', port: 8081, alias: '' },
+        ],
+      },
+    ];
+  });
+
+  // Sync nodes with backend API on mount
+  useEffect(() => {
+    const fetchNodes = async () => {
+      try {
+        const token = localStorage.getItem('nexus_token');
+        const res = await fetch('/api/v1/nodes', {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            const mapped: NodeItem[] = data.map((n: any) => ({
+              id: n.id,
+              name: n.name,
+              description: n.description || 'Nodo registrado en el clúster',
+              location: n.region?.name || 'Local',
+              fqdn: n.fqdn,
+              ssl: 'http',
+              allowAutoAllocation: true,
+              behindProxy: false,
+              maintenanceMode: n.isUnderMaintenance || false,
+              totalMemoryMb: n.totalMemoryMb || 32768,
+              memoryOverallocatePercent: 0,
+              diskSpaceMb: n.diskSpaceMb || 256000,
+              diskOverallocatePercent: 0,
+              maxUploadFilesizeMb: 100,
+              daemonPort: n.agentPort || 8080,
+              daemonSftpPort: 2022,
+              daemonBasePath: '/var/lib/panelmaster/volumes',
+              cpuCores: n.cpuCores || 8,
+              cpuUsage: '2.1%',
+              status: n.status || 'ONLINE',
+              allocations: [
+                { id: `alloc-${n.id}-1`, ip: n.fqdn, port: 25565, alias: `play.${n.name}.online`, serverName: '' },
+                { id: `alloc-${n.id}-2`, ip: n.fqdn, port: 25566, alias: '' },
+                { id: `alloc-${n.id}-3`, ip: n.fqdn, port: 25567, alias: '' },
+              ],
+            }));
+            setNodesList(mapped);
+            localStorage.setItem('pm_nodes_cache', JSON.stringify(mapped));
+          }
+        }
+      } catch (err) {
+        console.warn('Nodes backend fetch fallback:', err);
+      }
+    };
+    fetchNodes();
+  }, []);
 
   const [editingNode, setEditingNode] = useState<NodeItem | null>(null);
   const [nodeEditTab, setNodeEditTab] = useState<'about' | 'settings' | 'configuration' | 'allocation' | 'servers'>('about');
@@ -2964,18 +3022,47 @@ docker:
           {isNewNodeModalOpen && (
             <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
               <form
-                onSubmit={(e) => {
+                onSubmit={async (e) => {
                   e.preventDefault();
                   if (!createNodeForm.name || !createNodeForm.fqdn) {
                     toast.error(isEs ? 'Completa los campos requeridos' : 'Fill required fields');
                     return;
                   }
+                  const token = localStorage.getItem('nexus_token');
+                  let generatedId = `node-${Date.now()}`;
+
+                  try {
+                    const res = await fetch('/api/v1/nodes/register', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                      },
+                      body: JSON.stringify({
+                        name: createNodeForm.name.trim(),
+                        fqdn: createNodeForm.fqdn.trim(),
+                        location: createNodeForm.location,
+                        regionCode: createNodeForm.location.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+                        memoryTotalMb: createNodeForm.ramMb,
+                        diskTotalMb: createNodeForm.diskMb,
+                        cpuCores: 8,
+                        agentPort: 8080,
+                      }),
+                    });
+                    if (res.ok) {
+                      const saved = await res.json();
+                      if (saved && saved.id) generatedId = saved.id;
+                    }
+                  } catch (err) {
+                    console.warn('Could not register node in backend:', err);
+                  }
+
                   const newNode: NodeItem = {
-                    id: `node-${Date.now()}`,
-                    name: createNodeForm.name,
+                    id: generatedId,
+                    name: createNodeForm.name.trim(),
                     description: 'Nodo registrado en el panel',
                     location: createNodeForm.location,
-                    fqdn: createNodeForm.fqdn,
+                    fqdn: createNodeForm.fqdn.trim(),
                     ssl: 'http',
                     allowAutoAllocation: true,
                     behindProxy: false,
@@ -2991,11 +3078,16 @@ docker:
                     cpuCores: 8,
                     cpuUsage: '1.2%',
                     status: 'ONLINE',
-                    allocations: [],
+                    allocations: [
+                      { id: `alloc-${generatedId}-1`, ip: createNodeForm.fqdn.trim(), port: 25565, alias: '', serverName: '' },
+                      { id: `alloc-${generatedId}-2`, ip: createNodeForm.fqdn.trim(), port: 25566, alias: '', serverName: '' },
+                    ],
                   };
-                  setNodesList([...nodesList, newNode]);
+                  const updatedNodes = [...nodesList, newNode];
+                  setNodesList(updatedNodes);
+                  localStorage.setItem('pm_nodes_cache', JSON.stringify(updatedNodes));
                   setIsNewNodeModalOpen(false);
-                  toast.success(isEs ? `Nodo "${newNode.name}" creado. Configúralo en la pestaña Configuración.` : `Node "${newNode.name}" created. Configure it in Configuration tab.`);
+                  toast.success(isEs ? `Nodo "${newNode.name}" creado exitosamente.` : `Node "${newNode.name}" created successfully.`);
                 }}
                 className="w-full max-w-md bg-[#111114] border border-[#27272a] rounded-2xl p-6 space-y-4 shadow-2xl"
               >

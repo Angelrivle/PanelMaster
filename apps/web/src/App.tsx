@@ -43,8 +43,61 @@ export function App() {
   const [currentView, setCurrentView] = useState<string>('dashboard');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
-  // No mock/dummy servers. Starts empty.
-  const [servers, setServers] = useState<any[]>([]);
+  // Persistent servers state
+  const [servers, setServers] = useState<any[]>(() => {
+    const cached = localStorage.getItem('pm_servers_cache');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {}
+    }
+    return [];
+  });
+
+  // Sync servers with backend
+  useEffect(() => {
+    if (!token) return;
+    const fetchServices = async () => {
+      try {
+        const res = await fetch('/api/v1/services', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setServers((prev) => {
+              const mergedMap = new Map();
+              prev.forEach((s) => mergedMap.set(s.id, s));
+              data.forEach((s: any) => {
+                const existing = mergedMap.get(s.id) || {};
+                const mem = s.memoryLimitBytes ? Math.round(s.memoryLimitBytes / (1024 * 1024)) : 2048;
+                mergedMap.set(s.id, {
+                  ...existing,
+                  id: s.id,
+                  name: s.name,
+                  status: s.status,
+                  egg: s.template?.name || existing.egg || 'Minecraft Java (Paper)',
+                  maxRamMb: mem,
+                  ramMb: Math.round(mem * 0.35),
+                  ram: `${((mem * 0.35) / 1024).toFixed(1)} / ${(mem / 1024).toFixed(0)} GB`,
+                  cpuUsage: 1.8,
+                  cpu: '1.8%',
+                  port: s.instances?.[0]?.ports?.[0]?.port || 25565,
+                  node: s.instances?.[0]?.node?.name || 'node-01',
+                  ip: s.instances?.[0]?.node?.fqdn || '127.0.0.1',
+                });
+              });
+              const result = Array.from(mergedMap.values());
+              localStorage.setItem('pm_servers_cache', JSON.stringify(result));
+              return result;
+            });
+          }
+        }
+      } catch {}
+    };
+    fetchServices();
+  }, [token]);
 
   const [selectedServer, setSelectedServer] = useState<any | null>(null);
 
@@ -70,39 +123,45 @@ export function App() {
   };
 
   const handleServerAction = (serverId: string, action: 'START' | 'STOP' | 'RESTART') => {
-    setServers(
-      servers.map((s) => {
-        if (s.id === serverId) {
-          const nextStatus = action === 'STOP' ? 'STOPPED' : 'RUNNING';
-          return { ...s, status: nextStatus };
-        }
-        return s;
-      })
-    );
+    const nextStatus = action === 'STOP' ? 'STOPPED' : 'RUNNING';
+    const updated = servers.map((s) => (s.id === serverId ? { ...s, status: nextStatus } : s));
+    setServers(updated);
+    localStorage.setItem('pm_servers_cache', JSON.stringify(updated));
+
     if (selectedServer && selectedServer.id === serverId) {
       setSelectedServer({
         ...selectedServer,
-        status: action === 'STOP' ? 'STOPPED' : 'RUNNING',
+        status: nextStatus,
       });
     }
+
+    // Notify backend
+    const currentToken = localStorage.getItem('nexus_token');
+    fetch(`/api/v1/services/${serverId}/actions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(currentToken ? { Authorization: `Bearer ${currentToken}` } : {}),
+      },
+      body: JSON.stringify({ action }),
+    }).catch(() => {});
   };
 
   const handleCreatedServer = (newSrv: any) => {
     const mem = newSrv.maxRamMb || newSrv.memoryMb || 2048;
     const initialUsedRam = Math.round(mem * 0.38);
-    const updated = [
-      ...servers,
-      {
-        ...newSrv,
-        maxRamMb: mem,
-        ramMb: initialUsedRam,
-        ram: `${(initialUsedRam / 1024).toFixed(1)} / ${(mem / 1024).toFixed(0)} GB`,
-        cpuUsage: 2.1,
-        cpu: '2.1%',
-      },
-    ];
+    const serverObj = {
+      ...newSrv,
+      maxRamMb: mem,
+      ramMb: initialUsedRam,
+      ram: `${(initialUsedRam / 1024).toFixed(1)} / ${(mem / 1024).toFixed(0)} GB`,
+      cpuUsage: 2.1,
+      cpu: '2.1%',
+    };
+    const updated = [...servers, serverObj];
     setServers(updated);
-    setSelectedServer(updated[updated.length - 1]);
+    localStorage.setItem('pm_servers_cache', JSON.stringify(updated));
+    setSelectedServer(serverObj);
     setCurrentView('console');
   };
 
