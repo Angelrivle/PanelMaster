@@ -841,93 +841,152 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     const containerName = `nexus-${id}`;
 
     // Clean, elegant greeting without spam
-    wsClient.send(`\x1b[1;36m[PanelMaster]\x1b[0m Conectado a la consola segura de \x1b[1;37m${srvName}\x1b[0m\r\n\r\n`);
+    wsClient.send(`\x1b[1;36m[PanelMaster]\x1b[0m Conectado a la consola de \x1b[1;37m${srvName}\x1b[0m\r\n`);
 
     let activeStream: { abort: () => void } | null = null;
     let isWsClosed = false;
 
-    // Auto-reconnecting live log streamer
-    const startStreaming = async () => {
-      if (isWsClosed) return;
+    const stopActiveStream = () => {
       if (activeStream) {
         try { activeStream.abort(); } catch {}
         activeStream = null;
       }
+    };
 
-      let container = await dockerService.findContainerByName(containerName);
-
-      if (!container && dockerService.isAvailable()) {
-        const created = await dockerService.createServiceContainer({
-          serviceId: id,
-          name: srvName,
-          port: 25565,
-          startNow: true,
-        });
-        if (created && created.Id) {
-          container = { Id: created.Id };
-        }
-      }
-
-      if (!container) {
-        if (!isWsClosed) setTimeout(startStreaming, 1500);
-        return;
-      }
-
+    const attachLogs = (containerId: string) => {
+      stopActiveStream();
       activeStream = dockerService.streamLogs(
-        container.Id,
+        containerId,
         (chunk) => {
           if (wsClient.readyState === WebSocket.OPEN) {
             wsClient.send(chunk);
           }
         },
         () => {
-          // If the container stopped or restarted, auto re-attach stream in 1.5s
-          if (!isWsClosed) {
-            setTimeout(startStreaming, 1500);
+          if (wsClient.readyState === WebSocket.OPEN && !isWsClosed) {
+            wsClient.send('\r\n\x1b[33m[PanelMaster] El contenedor del servidor se ha detenido.\x1b[0m\r\n');
           }
-        }
+        },
+        0
       );
     };
 
-    startStreaming();
+    // On connect: check container state without automatically recreating or starting
+    try {
+      const container = await dockerService.findContainerByName(containerName);
+      if (container) {
+        // Send recent buffered output so user sees recent logs
+        const recentLogs = await dockerService.getLogs(container.Id, 60);
+        if (recentLogs && wsClient.readyState === WebSocket.OPEN) {
+          wsClient.send(recentLogs);
+        }
+
+        if (container.State === 'running') {
+          attachLogs(container.Id);
+        } else {
+          if (wsClient.readyState === WebSocket.OPEN) {
+            wsClient.send('\r\n\x1b[33m[PanelMaster] El servidor se encuentra apagado. Pulsa "Iniciar" para encenderlo.\x1b[0m\r\n');
+          }
+        }
+      } else {
+        if (wsClient.readyState === WebSocket.OPEN) {
+          wsClient.send('\r\n\x1b[33m[PanelMaster] El servidor se encuentra apagado. Pulsa "Iniciar" para encenderlo.\x1b[0m\r\n');
+        }
+      }
+    } catch (err: any) {
+      fastify.log.warn(`[Console WS Connect Error]: ${err.message}`);
+    }
 
     wsClient.on('close', () => {
       isWsClosed = true;
-      if (activeStream) {
-        try { activeStream.abort(); } catch {}
-      }
+      stopActiveStream();
     });
 
-    // Handle terminal commands and forward to container
+    // Handle terminal commands and power actions
     wsClient.on('message', async (data: any) => {
       const raw = data.toString().trim();
       if (!raw) return;
 
-      const container = await dockerService.findContainerByName(containerName);
-
-      // Handle power actions silently
+      // Power actions: START, STOP, RESTART, KILL
       if (raw.startsWith('__ACTION__:')) {
         const act = raw.replace('__ACTION__:', '');
-        if (container) {
-          if (act === 'START') await dockerService.startContainer(container.Id);
-          if (act === 'STOP') await dockerService.stopContainer(container.Id);
-          if (act === 'RESTART') await dockerService.restartContainer(container.Id);
-          if (act === 'KILL') await dockerService.killContainer(container.Id);
-        } else if (act === 'START') {
-          await dockerService.createServiceContainer({
-            serviceId: id,
-            name: srvName,
-            startNow: true,
-          });
+        stopActiveStream();
+
+        if (act === 'START') {
+          if (wsClient.readyState === WebSocket.OPEN) {
+            wsClient.send('\r\n\x1b[36m[PanelMaster] Iniciando servidor...\x1b[0m\r\n');
+          }
+          await prisma.service.updateMany({ where: { id }, data: { status: 'RUNNING' } });
+          await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'RUNNING' } });
+
+          let cur = await dockerService.findContainerByName(containerName);
+          if (cur) {
+            await dockerService.startContainer(cur.Id);
+            setTimeout(() => attachLogs(cur.Id), 600);
+          } else {
+            const created = await dockerService.createServiceContainer({
+              serviceId: id,
+              name: srvName,
+              port: 25565,
+              startNow: true,
+            });
+            if (created && created.Id) {
+              setTimeout(() => attachLogs(created.Id), 600);
+            }
+          }
+        } else if (act === 'STOP') {
+          if (wsClient.readyState === WebSocket.OPEN) {
+            wsClient.send('\r\n\x1b[33m[PanelMaster] Deteniendo servidor (guardando estado del mundo)...\x1b[0m\r\n');
+          }
+          await prisma.service.updateMany({ where: { id }, data: { status: 'STOPPED' } });
+          await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'STOPPED' } });
+
+          const cur = await dockerService.findContainerByName(containerName);
+          if (cur) {
+            await dockerService.stopContainer(cur.Id);
+          }
+        } else if (act === 'RESTART') {
+          if (wsClient.readyState === WebSocket.OPEN) {
+            wsClient.send('\r\n\x1b[36m[PanelMaster] Reiniciando servidor...\x1b[0m\r\n');
+          }
+          await prisma.service.updateMany({ where: { id }, data: { status: 'RUNNING' } });
+          await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'RUNNING' } });
+
+          let cur = await dockerService.findContainerByName(containerName);
+          if (cur) {
+            await dockerService.restartContainer(cur.Id);
+            setTimeout(() => attachLogs(cur.Id), 600);
+          } else {
+            const created = await dockerService.createServiceContainer({
+              serviceId: id,
+              name: srvName,
+              port: 25565,
+              startNow: true,
+            });
+            if (created && created.Id) {
+              setTimeout(() => attachLogs(created.Id), 600);
+            }
+          }
+        } else if (act === 'KILL') {
+          if (wsClient.readyState === WebSocket.OPEN) {
+            wsClient.send('\r\n\x1b[31m[PanelMaster] Detención forzada inmediata (KILL)...\x1b[0m\r\n');
+          }
+          await prisma.service.updateMany({ where: { id }, data: { status: 'STOPPED' } });
+          await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'STOPPED' } });
+
+          const cur = await dockerService.findContainerByName(containerName);
+          if (cur) {
+            await dockerService.killContainer(cur.Id);
+          }
         }
-        setTimeout(startStreaming, 1000);
         return;
       }
 
       // Execute command on container
-      if (!container) {
+      const container = await dockerService.findContainerByName(containerName);
+      if (!container || container.State !== 'running') {
         if (wsClient.readyState === WebSocket.OPEN) {
-          wsClient.send('\x1b[33m[PanelMaster]: El servidor aún no está en ejecución. Inicia el servidor para enviar comandos.\x1b[0m\r\n');
+          wsClient.send('\x1b[33m[PanelMaster]: El servidor está apagado. Inicia el servidor para enviar comandos.\x1b[0m\r\n');
         }
         return;
       }

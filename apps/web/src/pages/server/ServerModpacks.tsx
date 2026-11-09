@@ -205,9 +205,17 @@ export const ServerModpacks: React.FC<ServerModpacksProps> = ({ server }) => {
 
     try {
       const token = localStorage.getItem('nexus_token');
-      const chosenVer = modpackVersions.find((v) => v.version_number === selectedModpackVersion || v.name === selectedModpackVersion);
+      const chosenVer =
+        modpackVersions.find(
+          (v) => v.version_number === selectedModpackVersion || v.name === selectedModpackVersion
+        ) || (modpackVersions.length > 0 ? modpackVersions[0] : null);
+
       const mcVer = (chosenVer?.game_versions && chosenVer.game_versions[0]) || installingModpack.mcVersion || '1.20.1';
       const loader = (chosenVer?.loaders && chosenVer.loaders[0]) || installingModpack.loader || 'Fabric';
+      const finalVerNumber =
+        selectedModpackVersion === 'latest'
+          ? chosenVer?.version_number || 'latest'
+          : selectedModpackVersion;
 
       const res = await fetch(`/api/v1/services/${server.id}/modpack`, {
         method: 'POST',
@@ -218,7 +226,7 @@ export const ServerModpacks: React.FC<ServerModpacksProps> = ({ server }) => {
         body: JSON.stringify({
           modpackSlug: installingModpack.slug,
           modpackTitle: installingModpack.title,
-          versionNumber: selectedModpackVersion,
+          versionNumber: finalVerNumber,
           loader: loader,
           mcVersion: mcVer,
           wipeWorld,
@@ -234,7 +242,7 @@ export const ServerModpacks: React.FC<ServerModpacksProps> = ({ server }) => {
       setActiveModpack({
         title: installingModpack.title,
         slug: installingModpack.slug,
-        version: selectedModpackVersion,
+        version: finalVerNumber,
         loader: loader,
         mcVersion: mcVer,
         source: 'Modrinth',

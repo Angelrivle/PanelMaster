@@ -191,9 +191,14 @@ export class DockerService {
     const newMinorMatch = (options.version || '').match(/^1\.(\d+)/);
     const isDowngrade = prevMinorMatch && newMinorMatch && parseInt(newMinorMatch[1], 10) < parseInt(prevMinorMatch[1], 10);
 
-    // If clean install or downgrade, back up old incompatible world & clear old config jars
-    if (options.cleanInstall || isDowngrade) {
+    // If clean install, downgrade, or switching away from a modpack, wipe mods and incompatible configs
+    if (options.cleanInstall || isDowngrade || prevConfig.modPlatform) {
       try {
+        const modsPath = path.join(hostDataPath, 'mods');
+        if (fs.existsSync(modsPath)) fs.rmSync(modsPath, { recursive: true, force: true });
+        const configPath = path.join(hostDataPath, 'config');
+        if (fs.existsSync(configPath)) fs.rmSync(configPath, { recursive: true, force: true });
+
         if (fs.existsSync(hostDataPath)) {
           const items = fs.readdirSync(hostDataPath);
           for (const item of items) {
@@ -214,14 +219,16 @@ export class DockerService {
           }
 
           // Backup or reset world directories on downgrade or cleanInstall to prevent NBT chunk load crashes
-          for (const worldDir of ['world', 'world_nether', 'world_the_end']) {
-            const targetDir = path.join(hostDataPath, worldDir);
-            if (fs.existsSync(targetDir)) {
-              const backupName = `${worldDir}_backup_${(prevConfig.version || 'old').replace(/\./g, '_')}_${Date.now()}`;
-              try {
-                fs.renameSync(targetDir, path.join(hostDataPath, backupName));
-              } catch {
-                fs.rmSync(targetDir, { recursive: true, force: true });
+          if (options.cleanInstall || isDowngrade) {
+            for (const worldDir of ['world', 'world_nether', 'world_the_end']) {
+              const targetDir = path.join(hostDataPath, worldDir);
+              if (fs.existsSync(targetDir)) {
+                const backupName = `${worldDir}_backup_${(prevConfig.version || 'old').replace(/\./g, '_')}_${Date.now()}`;
+                try {
+                  fs.renameSync(targetDir, path.join(hostDataPath, backupName));
+                } catch {
+                  fs.rmSync(targetDir, { recursive: true, force: true });
+                }
               }
             }
           }
@@ -306,11 +313,37 @@ export class DockerService {
       } catch {}
     }
 
+    // Clean old server jar files so itzg doesn't pick up old paper/vanilla jars
+    try {
+      if (fs.existsSync(hostDataPath)) {
+        const files = fs.readdirSync(hostDataPath);
+        for (const file of files) {
+          if (file.endsWith('.jar') && !file.startsWith('fabric') && !file.startsWith('forge')) {
+            fs.rmSync(path.join(hostDataPath, file), { force: true });
+          }
+        }
+      }
+    } catch {}
+
+    // Determine correct Java version for this modpack's Minecraft version
+    let javaVer = 21;
+    const match = (options.mcVersion || '').match(/^1\.(\d+)/);
+    if (match) {
+      const minor = parseInt(match[1], 10);
+      if (minor <= 16) javaVer = 8;
+      else if (minor <= 20) {
+        javaVer = (options.mcVersion.startsWith('1.20.5') || options.mcVersion.startsWith('1.20.6')) ? 21 : 17;
+      } else {
+        javaVer = 21;
+      }
+    }
+
     const loaderUpper = (options.loader || 'fabric').trim().toUpperCase();
     const updatedConfig = {
       ...prevConfig,
       type: loaderUpper,
       version: options.mcVersion || '1.20.1',
+      java: javaVer,
       modPlatform: 'MODRINTH',
       modpack: options.modpackSlug,
       modpackTitle: options.modpackTitle,
@@ -398,9 +431,11 @@ export class DockerService {
     // Balanced JVM memory (65-70% heap, remaining for Metaspace/Native Netty to completely prevent OOM)
     const jvmHeapMb = Math.max(1024, Math.floor(memoryMb * 0.70));
 
+    const isModpack = !!(savedConfig.modPlatform && savedConfig.modpack);
+
     const envMap: Record<string, string> = {
       EULA: 'TRUE',
-      TYPE: serverType,
+      ...(isModpack ? {} : { TYPE: serverType }),
       VERSION: serverVersion,
       ONLINE_MODE: 'FALSE',
       MAX_PLAYERS: '20',
@@ -414,15 +449,28 @@ export class DockerService {
       USE_AIKARS_FLAGS: 'true',
       STOP_SERVER_ON_CONTAINER_EXIT: 'false',
       JVM_XX_OPTS: '-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC',
-      ...(savedConfig.modPlatform ? { MOD_PLATFORM: savedConfig.modPlatform } : {}),
-      ...(savedConfig.modpack ? { MODRINTH_MODPACK: savedConfig.modpack } : {}),
+      ...(isModpack
+        ? {
+            MOD_PLATFORM: savedConfig.modPlatform || 'MODRINTH',
+            MODPACK_PLATFORM: savedConfig.modPlatform || 'MODRINTH',
+            MODRINTH_MODPACK: savedConfig.modpack,
+            MODRINTH_VERSION_TYPE: 'release,beta,alpha',
+            MODRINTH_ALLOWED_VERSION_TYPE: 'alpha',
+            ...(savedConfig.modpackVersion && savedConfig.modpackVersion !== 'latest'
+              ? { MODRINTH_VERSION: savedConfig.modpackVersion }
+              : {}),
+            ...(savedConfig.loader
+              ? { MODRINTH_LOADER: savedConfig.loader.toLowerCase() }
+              : {}),
+          }
+        : {}),
       ...(options.environment || {}),
     };
 
     const envArray = Object.entries(envMap).map(([k, v]) => `${k}=${v}`);
     const portKey = `${port}/tcp`;
 
-    // Host Config with soft memory reservation and 1GB headroom buffer so kernel never OOM-kills the server
+    // Host Config with Pterodactyl container lifecycle: RestartPolicy = 'no' so Docker never auto-restarts into crash loops
     const createPayload = {
       Image: image,
       Env: envArray,
@@ -434,7 +482,7 @@ export class DockerService {
           [portKey]: [{ HostIp: '0.0.0.0', HostPort: String(port) }],
         },
         Binds: [`${hostDataPath}:/data`],
-        RestartPolicy: { Name: 'on-failure', MaximumRetryCount: 3 },
+        RestartPolicy: { Name: 'no' },
         MemoryReservation: memoryMb * 1024 * 1024,
         Memory: (memoryMb + 1024) * 1024 * 1024,
         MemorySwap: -1,
@@ -728,10 +776,48 @@ export class DockerService {
     };
   }
 
+  async getLogs(containerId: string, tail = 100): Promise<string> {
+    if (!this.isAvailable()) return '';
+    return new Promise((resolve) => {
+      const req = http.request(
+        {
+          socketPath: this.socketPath,
+          path: `/v1.43/containers/${containerId}/logs?stdout=1&stderr=1&tail=${tail}`,
+          method: 'GET',
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+          res.on('end', () => {
+            const raw = Buffer.concat(chunks);
+            let cleaned = '';
+            let offset = 0;
+            while (offset < raw.length) {
+              if (raw.length - offset >= 8 && (raw[offset] === 1 || raw[offset] === 2)) {
+                const frameLen = raw.readUInt32BE(offset + 4);
+                const frameStart = offset + 8;
+                const frameEnd = Math.min(raw.length, frameStart + frameLen);
+                cleaned += raw.subarray(frameStart, frameEnd).toString('utf-8');
+                offset = frameEnd;
+              } else {
+                cleaned += raw.subarray(offset).toString('utf-8');
+                break;
+              }
+            }
+            resolve(cleaned);
+          });
+        }
+      );
+      req.on('error', () => resolve(''));
+      req.end();
+    });
+  }
+
   streamLogs(
     containerId: string,
     onData: (chunk: string) => void,
-    onEnd: () => void
+    onEnd: () => void,
+    tail = 0
   ): { abort: () => void } {
     if (!this.isAvailable()) {
       onEnd();
@@ -741,7 +827,7 @@ export class DockerService {
     const req = http.request(
       {
         socketPath: this.socketPath,
-        path: `/v1.43/containers/${containerId}/logs?follow=1&stdout=1&stderr=1&tail=100`,
+        path: `/v1.43/containers/${containerId}/logs?follow=1&stdout=1&stderr=1&tail=${tail}`,
         method: 'GET',
       },
       (res) => {
