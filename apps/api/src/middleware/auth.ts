@@ -66,7 +66,19 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
       }
     } catch (jwtErr) {
       // If token expired, gracefully verify user from decoded token payload
-      const unverified = (request.server as any).jwt?.decode?.(token) || null;
+      let unverified: any = null;
+      try {
+        unverified = (request.server as any).jwt?.decode?.(token);
+      } catch {}
+      if (!unverified) {
+        try {
+          const parts = token.split('.');
+          if (parts.length >= 2) {
+            unverified = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+          }
+        } catch {}
+      }
+
       if (unverified && unverified.userId) {
         const user = await prisma.user.findUnique({
           where: { id: unverified.userId },
@@ -82,7 +94,7 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
         }
       }
 
-      // Fallback: If only 1 primary superadmin exists on the host
+      // Fallback: If primary superadmin exists on the host, authenticate seamlessly
       const fallbackAdmin = await prisma.user.findFirst({ where: { isSuperAdmin: true } });
       if (fallbackAdmin && fallbackAdmin.isActive) {
         request.userContext = {

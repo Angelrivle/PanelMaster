@@ -186,25 +186,66 @@ export class DockerService {
     else if (rawFork.includes('catserver')) type = 'CATSERVER';
     else type = rawFork.toUpperCase();
 
-    // If clean install requested, purge previous conflicting jars & cache
-    if (options.cleanInstall) {
+    // Check if downgrading minor version (e.g. 1.20 -> 1.8)
+    const prevMinorMatch = (prevConfig.version || '1.20.4').match(/^1\.(\d+)/);
+    const newMinorMatch = (options.version || '').match(/^1\.(\d+)/);
+    const isDowngrade = prevMinorMatch && newMinorMatch && parseInt(newMinorMatch[1], 10) < parseInt(prevMinorMatch[1], 10);
+
+    // If clean install or downgrade, back up old incompatible world & clear old config jars
+    if (options.cleanInstall || isDowngrade) {
       try {
         if (fs.existsSync(hostDataPath)) {
           const items = fs.readdirSync(hostDataPath);
           for (const item of items) {
+            const itemPath = path.join(hostDataPath, item);
             if (
               item.endsWith('.jar') ||
               item === 'cache' ||
               item === 'libraries' ||
               item === '.fabric' ||
               item === 'paper.yml' ||
-              item === 'spigot.yml'
+              item === 'spigot.yml' ||
+              item === 'bukkit.yml' ||
+              item === 'paper-global.yml' ||
+              item === 'paper-world-defaults.yml'
             ) {
-              fs.rmSync(path.join(hostDataPath, item), { recursive: true, force: true });
+              fs.rmSync(itemPath, { recursive: true, force: true });
+            }
+          }
+
+          // Backup or reset world directories on downgrade or cleanInstall to prevent NBT chunk load crashes
+          for (const worldDir of ['world', 'world_nether', 'world_the_end']) {
+            const targetDir = path.join(hostDataPath, worldDir);
+            if (fs.existsSync(targetDir)) {
+              const backupName = `${worldDir}_backup_${(prevConfig.version || 'old').replace(/\./g, '_')}_${Date.now()}`;
+              try {
+                fs.renameSync(targetDir, path.join(hostDataPath, backupName));
+              } catch {
+                fs.rmSync(targetDir, { recursive: true, force: true });
+              }
             }
           }
         }
-      } catch {}
+      } catch (err: any) {
+        console.error(`[DockerService] Notice during version files cleanup: ${err.message}`);
+      }
+    }
+
+    // Determine target Java version
+    let javaVer = options.java;
+    if (!javaVer) {
+      const match = (options.version || '').match(/^1\.(\d+)/);
+      if (match) {
+        const minor = parseInt(match[1], 10);
+        if (minor <= 16) javaVer = 8;
+        else if (minor <= 20) {
+          javaVer = (options.version?.startsWith('1.20.5') || options.version?.startsWith('1.20.6')) ? 21 : 17;
+        } else {
+          javaVer = 21;
+        }
+      } else {
+        javaVer = 21;
+      }
     }
 
     const updatedConfig = {
@@ -213,7 +254,7 @@ export class DockerService {
       version: options.version || '1.20.4',
       fork: options.fork || 'Paper',
       build: options.build || 'Latest',
-      java: options.java || 17,
+      java: javaVer,
       modPlatform: null,
       modpack: null,
       modpackTitle: null,
@@ -294,9 +335,46 @@ export class DockerService {
     }
 
     const containerName = `nexus-${options.serviceId}`;
-    const image = options.image || 'itzg/minecraft-server:latest';
     const port = options.port || 25565;
     const memoryMb = options.memoryMb || 2048;
+
+    // Read saved configuration for this server (version, fork, modpack)
+    const savedConfig = this.getServerConfig(options.serviceId);
+    const serverType = options.environment?.TYPE || savedConfig.type || 'PAPER';
+    const serverVersion = options.environment?.VERSION || savedConfig.version || '1.20.4';
+
+    // Match Docker Java image to Minecraft version
+    let image = options.image;
+    if (!image || image === 'itzg/minecraft-server:latest') {
+      const javaVer = savedConfig.java;
+      if (javaVer === 8) {
+        image = 'itzg/minecraft-server:java8';
+      } else if (javaVer === 11) {
+        image = 'itzg/minecraft-server:java11';
+      } else if (javaVer === 17) {
+        image = 'itzg/minecraft-server:java17';
+      } else if (javaVer === 21) {
+        image = 'itzg/minecraft-server:java21';
+      } else {
+        const match = serverVersion.match(/^1\.(\d+)/);
+        if (match) {
+          const minor = parseInt(match[1], 10);
+          if (minor <= 16) {
+            image = 'itzg/minecraft-server:java8';
+          } else if (minor <= 20) {
+            if (serverVersion.startsWith('1.20.5') || serverVersion.startsWith('1.20.6')) {
+              image = 'itzg/minecraft-server:java21';
+            } else {
+              image = 'itzg/minecraft-server:java17';
+            }
+          } else {
+            image = 'itzg/minecraft-server:java21';
+          }
+        } else {
+          image = 'itzg/minecraft-server:java21';
+        }
+      }
+    }
 
     // Remove old container if exists
     try {
@@ -316,11 +394,6 @@ export class DockerService {
         fs.mkdirSync(hostDataPath, { recursive: true });
       }
     } catch {}
-
-    // Read saved configuration for this server (version, fork, modpack)
-    const savedConfig = this.getServerConfig(options.serviceId);
-    const serverType = options.environment?.TYPE || savedConfig.type || 'PAPER';
-    const serverVersion = options.environment?.VERSION || savedConfig.version || '1.20.4';
 
     // Balanced JVM memory (65-70% heap, remaining for Metaspace/Native Netty to completely prevent OOM)
     const jvmHeapMb = Math.max(1024, Math.floor(memoryMb * 0.70));
@@ -361,7 +434,7 @@ export class DockerService {
           [portKey]: [{ HostIp: '0.0.0.0', HostPort: String(port) }],
         },
         Binds: [`${hostDataPath}:/data`],
-        RestartPolicy: { Name: 'unless-stopped' },
+        RestartPolicy: { Name: 'on-failure', MaximumRetryCount: 3 },
         MemoryReservation: memoryMb * 1024 * 1024,
         Memory: (memoryMb + 1024) * 1024 * 1024,
         MemorySwap: -1,

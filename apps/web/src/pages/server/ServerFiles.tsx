@@ -80,48 +80,28 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
   const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Exact file tree from Image 7
+  // File tree state
   const [fileSystem, setFileSystem] = useState<FileNode[]>([
-    // Folders
-    { name: 'config', path: '/config', isDir: true, parentDir: '' },
-    { name: 'plugins', path: '/plugins', isDir: true, parentDir: '' },
-    { name: 'assets', path: '/assets', isDir: true, parentDir: '' },
-
-    // Inside /config
-    { name: 'paper-global.yml', path: '/config/paper-global.yml', isDir: false, size: 4200, parentDir: '/config' },
-    { name: 'paper-world-defaults.yml', path: '/config/paper-world-defaults.yml', isDir: false, size: 6800, parentDir: '/config' },
-    { name: 'configurate-core.jar', path: '/config/configurate-core.jar', isDir: false, size: 840000, parentDir: '/config' },
-
-    // Inside /plugins
-    { name: 'Shop.jar', path: '/plugins/Shop.jar', isDir: false, size: 1400000, parentDir: '/plugins' },
-    { name: 'spark.jar', path: '/plugins/spark.jar', isDir: false, size: 2100000, parentDir: '/plugins' },
-
-    // Inside /assets
-    { name: 'lobby-nights.mp3', path: '/assets/lobby-nights.mp3', isDir: false, size: 4800000, parentDir: '/assets' },
-    { name: 'logo.svg', path: '/assets/logo.svg', isDir: false, size: 18400, parentDir: '/assets' },
-    { name: 'banner.png', path: '/assets/banner.png', isDir: false, size: 340000, parentDir: '/assets' },
-
-    // Root files
     { name: 'server.properties', path: '/server.properties', isDir: false, size: 1420, parentDir: '' },
-    { name: 'whitelist.json', path: '/whitelist.json', isDir: false, size: 120, parentDir: '' },
-    { name: 'ops.json', path: '/ops.json', isDir: false, size: 240, parentDir: '' },
-    { name: 'eula.txt', path: '/eula.txt', isDir: false, size: 160, parentDir: '' },
+    { name: 'plugins', path: '/plugins', isDir: true, parentDir: '' },
+    { name: 'config', path: '/config', isDir: true, parentDir: '' },
   ]);
 
-  // Expanded folders (config, plugins, assets open by default matching Image 7)
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+
+  // Expanded folders (config, plugins open by default)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(
-    new Set(['/config', '/plugins', '/assets'])
+    new Set(['/config', '/plugins'])
   );
   const [filterQuery, setFilterQuery] = useState('');
 
-  // Sample pre-loaded file contents
+  // Sample fallback file contents
   const sampleContents: Record<string, string> = {
-    '/server.properties': `motd=A Minecraft Server powered by NexusPanel\nserver-port=25565\nmax-players=20\nonline-mode=true\ndifficulty=normal\npvp=true\nview-distance=10\nlevel-name=world\n`,
-    '/config/paper-global.yml': `# Paper Global Configuration\n# Chunk system settings\nchunk-system-worker-threads: 4\nlogging:\n  log-player-ip-addresses: true\n  use-legacy-chat: false\n`,
-    '/config/paper-world-defaults.yml': `# Paper World Defaults\nanticheat:\n  obfuscation:\n    items: true\nentity-behavior:\n  despawn-ranges:\n    monster:\n      soft: 32\n      hard: 128\n`,
-    '/whitelist.json': `[\n  {\n    "uuid": "4566e69f-c907-48ee-8d71-d7ba5aa00d20",\n    "name": "Angel"\n  }\n]\n`,
-    '/ops.json': `[\n  {\n    "uuid": "4566e69f-c907-48ee-8d71-d7ba5aa00d20",\n    "name": "Angel",\n    "level": 4,\n    "bypassesPlayerLimit": true\n  }\n]\n`,
-    '/eula.txt': `#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\neula=true\n`,
+    '/server.properties': `motd=A Minecraft Server powered by PanelMaster\nserver-port=25565\nmax-players=20\nonline-mode=false\ndifficulty=normal\npvp=true\nview-distance=10\nlevel-name=world\n`,
+    '/config/paper-global.yml': `# Paper Global Configuration\nchunk-system-worker-threads: 4\nlogging:\n  log-player-ip-addresses: true\n`,
+    '/eula.txt': `eula=true\n`,
   };
 
   // Open tabs
@@ -136,6 +116,33 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
     },
   ]);
   const [activeTabPath, setActiveTabPath] = useState<string>('/server.properties');
+
+  // Real-time Filesystem Synchronization with VPS host
+  const fetchFiles = useCallback(async () => {
+    if (!server?.id) return;
+    try {
+      const token = localStorage.getItem('nexus_token');
+      const res = await fetch(`/api/v1/services/${server.id}/files?recursive=true`, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setFileSystem(data);
+        }
+      }
+    } catch (err) {
+      console.error('[ServerFiles] Live sync error:', err);
+    }
+  }, [server?.id]);
+
+  useEffect(() => {
+    fetchFiles();
+    const interval = setInterval(fetchFiles, 4000);
+    return () => clearInterval(interval);
+  }, [fetchFiles]);
 
   // Split View state
   const [isSplitView, setIsSplitView] = useState(false);
@@ -292,7 +299,7 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
     return 'plaintext';
   };
 
-  const openFile = (node: FileNode) => {
+  const openFile = async (node: FileNode) => {
     if (node.isDir) {
       toggleFolder(node.path);
       return;
@@ -309,8 +316,27 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
     }
 
     const existing = openTabs.find((t) => t.path === node.path);
-    if (!existing) {
-      const content = sampleContents[node.path] || `# Content of ${node.name}\n`;
+    if (existing) {
+      setActiveTabPath(node.path);
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('nexus_token');
+      const res = await fetch(`/api/v1/services/${server.id}/files/content?path=${encodeURIComponent(node.path)}`, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      let content = '';
+      if (res.ok) {
+        const data = await res.json();
+        content = data.content ?? '';
+      } else {
+        content = sampleContents[node.path] || `# Archivo: ${node.name}\n`;
+      }
+
       const newTab: OpenTab = {
         path: node.path,
         name: node.name,
@@ -319,9 +345,21 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
         language: getLanguageFromPath(node.path),
         isDirty: false,
       };
-      setOpenTabs([...openTabs, newTab]);
+      setOpenTabs((prev) => [...prev, newTab]);
+      setActiveTabPath(node.path);
+    } catch {
+      const fallbackContent = sampleContents[node.path] || `# Archivo: ${node.name}\n`;
+      const newTab: OpenTab = {
+        path: node.path,
+        name: node.name,
+        content: fallbackContent,
+        originalContent: fallbackContent,
+        language: getLanguageFromPath(node.path),
+        isDirty: false,
+      };
+      setOpenTabs((prev) => [...prev, newTab]);
+      setActiveTabPath(node.path);
     }
-    setActiveTabPath(node.path);
   };
 
   const closeTab = (e: React.MouseEvent, path: string) => {
@@ -368,11 +406,112 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
     executeSave(activeTab);
   };
 
-  const executeSave = (tab: OpenTab) => {
-    setOpenTabs((prev) =>
-      prev.map((t) => (t.path === tab.path ? { ...t, originalContent: t.content, isDirty: false } : t))
-    );
-    setSyntaxErrorModal(null);
+  const executeSave = async (tab: OpenTab) => {
+    try {
+      const token = localStorage.getItem('nexus_token');
+      const res = await fetch(`/api/v1/services/${server.id}/files/content`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          path: tab.path,
+          content: tab.content,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Error al guardar archivo en el servidor');
+      }
+
+      setOpenTabs((prev) =>
+        prev.map((t) => (t.path === tab.path ? { ...t, originalContent: t.content, isDirty: false } : t))
+      );
+      setSyntaxErrorModal(null);
+      toast.success(`¡Archivo ${tab.name} guardado correctamente!`);
+      fetchFiles();
+    } catch (err: any) {
+      toast.error(err.message || 'Error al guardar archivo');
+    }
+  };
+
+  // Drag & Drop File & .jar Upload
+  const handleFileUpload = async (files: FileList | File[], targetPath: string = '') => {
+    if (!server?.id || files.length === 0) return;
+    setIsUploading(true);
+
+    for (const file of Array.from(files)) {
+      try {
+        toast.info(`Subiendo ${file.name}...`);
+        const reader = new FileReader();
+        const base64Promise = new Promise<string>((resolve, reject) => {
+          reader.onload = () => {
+            const result = reader.result as string;
+            const base64 = result.split(',')[1] || result;
+            resolve(base64);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        const contentBase64 = await base64Promise;
+        const token = localStorage.getItem('nexus_token');
+        const res = await fetch(`/api/v1/services/${server.id}/files/upload`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            path: targetPath,
+            filename: file.name,
+            contentBase64,
+          }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `Error subiendo ${file.name}`);
+        }
+
+        toast.success(`¡${file.name} subido exitosamente!`);
+      } catch (err: any) {
+        toast.error(err.message || `Error al subir ${file.name}`);
+      }
+    }
+
+    setIsUploading(false);
+    fetchFiles();
+  };
+
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(true);
+  };
+
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDraggingOver(false);
+  };
+
+  const onDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      let targetDir = '';
+      const firstFile = e.dataTransfer.files[0];
+      if (firstFile.name.endsWith('.jar')) {
+        const pluginsExists = fileSystem.some((f) => f.path === '/plugins' && f.isDir);
+        if (pluginsExists) targetDir = '/plugins';
+      }
+      await handleFileUpload(e.dataTransfer.files, targetDir);
+    }
   };
 
   const handleRightClick = (e: React.MouseEvent, item: FileNode) => {
@@ -459,8 +598,22 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
   return (
     <div
       ref={containerRef}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       className="flex h-full w-full bg-[#09090b] text-zinc-200 select-none overflow-hidden relative font-sans"
     >
+      {/* Pterodactyl-Style Drag & Drop Glowing Overlay */}
+      {isDraggingOver && (
+        <div className="absolute inset-0 bg-[#090d16]/90 border-2 border-dashed border-sky-400 rounded-xl z-50 flex flex-col items-center justify-center p-6 backdrop-blur-sm pointer-events-none animate-in fade-in duration-150">
+          <div className="w-16 h-16 rounded-2xl bg-sky-500/10 border border-sky-400/30 flex items-center justify-center text-sky-400 mb-3 animate-bounce">
+            <FolderInput className="w-8 h-8" />
+          </div>
+          <h3 className="text-base font-bold text-white tracking-wide">Suelta tus archivos o plugins .jar aquí</h3>
+          <p className="text-xs text-sky-300 mt-1">Se subirán y sincronizarán en tiempo real directamente en el servidor</p>
+        </div>
+      )}
+
       {/* ============================================================== */}
       {/* 1. LEFT PANEL: EXPLORER TREE (Minimalist PanelMaster style)    */}
       {/* ============================================================== */}
@@ -483,14 +636,24 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
                     title: 'Crear Nuevo Archivo',
                     description: 'Introduce el nombre del archivo con su extensión (ej. config.yml, bot.js):',
                     placeholder: 'archivo.txt',
-                    onConfirm: (name) => {
-                      if (name.trim()) {
-                        const cleanName = name.trim();
-                        setFileSystem([
-                          ...fileSystem,
-                          { name: cleanName, path: `/${cleanName}`, isDir: false, size: 0, parentDir: '' },
-                        ]);
+                    onConfirm: async (name) => {
+                      if (!name.trim() || !server?.id) return;
+                      const cleanName = name.trim();
+                      try {
+                        const token = localStorage.getItem('nexus_token');
+                        await fetch(`/api/v1/services/${server.id}/files/content`, {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                          },
+                          body: JSON.stringify({ path: `/${cleanName}`, content: '' }),
+                        });
                         toast.success(`Archivo "${cleanName}" creado.`);
+                        await fetchFiles();
+                        openFile({ name: cleanName, path: `/${cleanName}`, isDir: false, parentDir: '' });
+                      } catch {
+                        toast.error('Error al crear archivo');
                       }
                     },
                   });
@@ -508,14 +671,23 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
                     title: 'Crear Nueva Carpeta',
                     description: 'Introduce el nombre del directorio:',
                     placeholder: 'nueva-carpeta',
-                    onConfirm: (name) => {
-                      if (name.trim()) {
-                        const cleanName = name.trim();
-                        setFileSystem([
-                          ...fileSystem,
-                          { name: cleanName, path: `/${cleanName}`, isDir: true, parentDir: '' },
-                        ]);
+                    onConfirm: async (name) => {
+                      if (!name.trim() || !server?.id) return;
+                      const cleanName = name.trim();
+                      try {
+                        const token = localStorage.getItem('nexus_token');
+                        await fetch(`/api/v1/services/${server.id}/files/folder`, {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                          },
+                          body: JSON.stringify({ folderName: cleanName }),
+                        });
                         toast.success(`Carpeta "${cleanName}" creada.`);
+                        await fetchFiles();
+                      } catch {
+                        toast.error('Error al crear carpeta');
                       }
                     },
                   });
@@ -533,7 +705,10 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
               <button
-                onClick={() => {}}
+                onClick={() => {
+                  toast.info('Actualizando archivos del servidor...');
+                  fetchFiles();
+                }}
                 title="Refresh"
                 className="p-1 hover:text-white rounded hover:bg-[#141418]"
               >
@@ -987,12 +1162,26 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
                 title: 'Renombrar Archivo',
                 description: `Introduce el nuevo nombre para "${currentItem.name}":`,
                 placeholder: currentItem.name,
-                onConfirm: (newName) => {
-                  if (newName.trim() && newName.trim() !== currentItem.name) {
-                    setFileSystem(
-                      fileSystem.map((f) => (f.path === currentItem.path ? { ...f, name: newName.trim() } : f))
-                    );
-                    toast.success(`Archivo renombrado a "${newName.trim()}".`);
+                onConfirm: async (newName) => {
+                  if (newName.trim() && newName.trim() !== currentItem.name && server?.id) {
+                    const cleanNew = newName.trim();
+                    const parentDir = currentItem.parentDir || '';
+                    const newPath = `${parentDir}/${cleanNew}`.replace(/\/+/g, '/');
+                    try {
+                      const token = localStorage.getItem('nexus_token');
+                      await fetch(`/api/v1/services/${server.id}/files/rename`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                        },
+                        body: JSON.stringify({ oldPath: currentItem.path, newPath }),
+                      });
+                      toast.success(`Archivo renombrado a "${cleanNew}".`);
+                      await fetchFiles();
+                    } catch {
+                      toast.error('Error al renombrar archivo');
+                    }
                   }
                 },
               });
@@ -1155,9 +1344,23 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
                 open: true,
                 title: 'Eliminar Permanentemente',
                 message: `¿Estás seguro de destruir permanentemente "${item.name}"? Esta acción no se puede deshacer.`,
-                onConfirm: () => {
-                  setFileSystem(fileSystem.filter((f) => f.path !== item.path));
-                  toast.success(`"${item.name}" eliminado definitivamente.`);
+                onConfirm: async () => {
+                  if (!server?.id) return;
+                  try {
+                    const token = localStorage.getItem('nexus_token');
+                    await fetch(`/api/v1/services/${server.id}/files?path=${encodeURIComponent(item.path)}`, {
+                      method: 'DELETE',
+                      headers: {
+                        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                      },
+                    });
+                    toast.success(`"${item.name}" eliminado definitivamente.`);
+                    setOpenTabs((prev) => prev.filter((t) => t.path !== item.path));
+                    if (activeTabPath === item.path) setActiveTabPath('');
+                    await fetchFiles();
+                  } catch {
+                    toast.error('Error al eliminar archivo');
+                  }
                 },
               });
               setContextMenu(null);

@@ -62,34 +62,53 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
     xtermInstance.current = term;
     fitAddonRef.current = fitAddon;
 
-    // Connect WebSocket
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/v1/services/${serviceId}/console`;
-    const ws = new WebSocket(wsUrl);
-    socketRef.current = ws;
+    let isMounted = true;
+    let reconnectTimeout: any = null;
 
-    ws.onopen = () => {
-      setIsConnected(true);
+    // Resilient Auto-Reconnecting WebSocket
+    const connectWs = () => {
+      if (!isMounted) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/api/v1/services/${serviceId}/console`;
+      const ws = new WebSocket(wsUrl);
+      socketRef.current = ws;
+
+      ws.onopen = () => {
+        if (!isMounted) return;
+        setIsConnected(true);
+      };
+
+      ws.onmessage = (event) => {
+        if (!isMounted) return;
+        term.write(event.data);
+      };
+
+      ws.onclose = () => {
+        if (!isMounted) return;
+        setIsConnected(false);
+        if (!reconnectTimeout) {
+          reconnectTimeout = setTimeout(() => {
+            reconnectTimeout = null;
+            if (isMounted) {
+              term.writeln('\r\n\x1b[36m[PanelMaster] Reconectando consola con el host...\x1b[0m\r\n');
+              connectWs();
+            }
+          }, 2500);
+        }
+      };
+
+      ws.onerror = () => {
+        if (!isMounted) return;
+        setIsConnected(false);
+      };
     };
 
-    ws.onmessage = (event) => {
-      term.write(event.data);
-    };
-
-    ws.onclose = () => {
-      setIsConnected(false);
-      term.writeln('\r\n\x1b[1;31m✗ Conexión de consola cerrada por el host.\x1b[0m');
-    };
-
-    ws.onerror = () => {
-      setIsConnected(false);
-      term.writeln('\r\n\x1b[1;31m✗ Error de comunicación en websocket de consola.\x1b[0m');
-    };
+    connectWs();
 
     // Forward terminal keystrokes to WS
     term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(data);
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(data);
       }
     });
 
@@ -97,8 +116,10 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
     window.addEventListener('resize', handleResize);
 
     return () => {
+      isMounted = false;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
       window.removeEventListener('resize', handleResize);
-      ws.close();
+      if (socketRef.current) socketRef.current.close();
       term.dispose();
     };
   }, [serviceId]);

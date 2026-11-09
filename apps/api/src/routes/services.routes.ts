@@ -1,6 +1,8 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import WebSocket from 'ws';
+import fs from 'fs';
+import path from 'path';
 import { prisma } from '../prisma';
 import { dockerService } from '../services/docker.service';
 
@@ -154,6 +156,272 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     try {
       const stats = await dockerService.getContainerStats(id);
       return reply.send(stats);
+    } catch (err: any) {
+      return reply.status(500).send({ error: err.message });
+    }
+  });
+
+  // -------------------------------------------------------------
+  // REAL FILESYSTEM MANAGEMENT API (Mounted at /var/lib/panelmaster/volumes/:id)
+  // -------------------------------------------------------------
+
+  // List Files & Folders
+  fastify.get('/:id/files', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { path: reqPath = '', recursive = 'false' } = request.query as { path?: string; recursive?: string };
+    const baseDir = path.resolve(`/var/lib/panelmaster/volumes/${id}`);
+
+    try {
+      if (!fs.existsSync(baseDir)) {
+        fs.mkdirSync(baseDir, { recursive: true });
+      }
+
+      const cleanSub = (reqPath || '').replace(/^\/+/, '');
+      const targetDir = path.resolve(baseDir, cleanSub);
+
+      if (!targetDir.startsWith(baseDir)) {
+        return reply.status(403).send({ error: 'Acceso denegado fuera del volumen' });
+      }
+
+      if (!fs.existsSync(targetDir)) {
+        return reply.send([]);
+      }
+
+      const result: Array<{
+        name: string;
+        path: string;
+        isDir: boolean;
+        size: number;
+        parentDir: string;
+        modifiedTime: string;
+      }> = [];
+
+      const walk = (dir: string, currentParentRel: string, depth: number) => {
+        if (depth > 4) return;
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const itemFullPath = path.join(dir, entry.name);
+            let size = 0;
+            let modifiedTime = new Date().toISOString();
+            try {
+              const stat = fs.statSync(itemFullPath);
+              size = entry.isDirectory() ? 0 : stat.size;
+              modifiedTime = stat.mtime.toISOString();
+            } catch {}
+
+            const relPath = '/' + path.relative(baseDir, itemFullPath).replace(/\\/g, '/');
+            result.push({
+              name: entry.name,
+              path: relPath,
+              isDir: entry.isDirectory(),
+              size,
+              parentDir: currentParentRel ? '/' + currentParentRel.replace(/\\/g, '/') : '',
+              modifiedTime,
+            });
+
+            if (entry.isDirectory() && recursive === 'true') {
+              if (['region', 'entities', 'poi', 'cache', 'libraries', '.git'].includes(entry.name)) {
+                continue;
+              }
+              const nextParentRel = path.relative(baseDir, itemFullPath);
+              walk(itemFullPath, nextParentRel, depth + 1);
+            }
+          }
+        } catch {}
+      };
+
+      walk(targetDir, cleanSub, 0);
+
+      // Sort: folders first, then files alphabetically
+      result.sort((a, b) => {
+        if (a.isDir && !b.isDir) return -1;
+        if (!a.isDir && b.isDir) return 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      return reply.send(result);
+    } catch (err: any) {
+      fastify.log.error(`[Files List Error]: ${err.message}`);
+      return reply.status(500).send({ error: 'Error al listar archivos', items: [] });
+    }
+  });
+
+  // Read File Content
+  fastify.get('/:id/files/content', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { path: reqPath = '' } = request.query as { path: string };
+    const baseDir = path.resolve(`/var/lib/panelmaster/volumes/${id}`);
+
+    try {
+      const cleanSub = (reqPath || '').replace(/^\/+/, '');
+      const targetFile = path.resolve(baseDir, cleanSub);
+
+      if (!targetFile.startsWith(baseDir)) {
+        return reply.status(403).send({ error: 'Acceso denegado' });
+      }
+
+      if (!fs.existsSync(targetFile)) {
+        return reply.status(404).send({ error: 'El archivo solicitado no existe' });
+      }
+
+      const stat = fs.statSync(targetFile);
+      if (stat.isDirectory()) {
+        return reply.status(400).send({ error: 'La ruta es un directorio, no un archivo' });
+      }
+
+      if (stat.size > 8 * 1024 * 1024) {
+        return reply.status(400).send({ error: 'El archivo es demasiado grande para edición web (máx 8MB)' });
+      }
+
+      const content = fs.readFileSync(targetFile, 'utf8');
+      return reply.send({ content, size: stat.size, name: path.basename(targetFile) });
+    } catch (err: any) {
+      return reply.status(500).send({ error: err.message });
+    }
+  });
+
+  // Save File Content
+  fastify.post('/:id/files/content', {
+    preHandler: [fastify.authenticate],
+    bodyLimit: 15 * 1024 * 1024,
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { path: reqPath, content } = request.body as { path: string; content: string };
+    const baseDir = path.resolve(`/var/lib/panelmaster/volumes/${id}`);
+
+    try {
+      const cleanSub = (reqPath || '').replace(/^\/+/, '');
+      const targetFile = path.resolve(baseDir, cleanSub);
+
+      if (!targetFile.startsWith(baseDir)) {
+        return reply.status(403).send({ error: 'Acceso denegado' });
+      }
+
+      fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+      fs.writeFileSync(targetFile, content ?? '', 'utf8');
+      return reply.send({ success: true, message: 'Archivo guardado correctamente' });
+    } catch (err: any) {
+      return reply.status(500).send({ error: err.message });
+    }
+  });
+
+  // Upload File (Supports .jar, .zip, .yml, plugins, etc. via Base64 payload)
+  fastify.post('/:id/files/upload', {
+    preHandler: [fastify.authenticate],
+    bodyLimit: 250 * 1024 * 1024, // 250MB buffer for server jars/plugins
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { path: reqDir = '', filename, contentBase64 } = request.body as {
+      path?: string;
+      filename: string;
+      contentBase64: string;
+    };
+
+    if (!filename || !contentBase64) {
+      return reply.status(400).send({ error: 'Filename y contentBase64 son requeridos' });
+    }
+
+    const baseDir = path.resolve(`/var/lib/panelmaster/volumes/${id}`);
+
+    try {
+      const cleanSub = (reqDir || '').replace(/^\/+/, '');
+      const targetDir = path.resolve(baseDir, cleanSub);
+
+      if (!targetDir.startsWith(baseDir)) {
+        return reply.status(403).send({ error: 'Acceso denegado' });
+      }
+
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const cleanFilename = path.basename(filename);
+      const targetFile = path.resolve(targetDir, cleanFilename);
+
+      if (!targetFile.startsWith(baseDir)) {
+        return reply.status(403).send({ error: 'Nombre de archivo no válido' });
+      }
+
+      const buffer = Buffer.from(contentBase64, 'base64');
+      fs.writeFileSync(targetFile, buffer);
+
+      return reply.send({
+        success: true,
+        message: `Archivo ${cleanFilename} subido exitosamente`,
+        size: buffer.length,
+        path: '/' + path.relative(baseDir, targetFile).replace(/\\/g, '/'),
+      });
+    } catch (err: any) {
+      fastify.log.error(`[File Upload Error]: ${err.message}`);
+      return reply.status(500).send({ error: err.message });
+    }
+  });
+
+  // Create Folder
+  fastify.post('/:id/files/folder', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { path: reqDir = '', folderName } = request.body as { path?: string; folderName: string };
+    const baseDir = path.resolve(`/var/lib/panelmaster/volumes/${id}`);
+
+    try {
+      const cleanSub = (reqDir || '').replace(/^\/+/, '');
+      const cleanName = path.basename(folderName || 'Nueva Carpeta');
+      const targetFolder = path.resolve(baseDir, cleanSub, cleanName);
+
+      if (!targetFolder.startsWith(baseDir)) {
+        return reply.status(403).send({ error: 'Acceso denegado' });
+      }
+
+      fs.mkdirSync(targetFolder, { recursive: true });
+      return reply.send({ success: true, message: 'Carpeta creada exitosamente' });
+    } catch (err: any) {
+      return reply.status(500).send({ error: err.message });
+    }
+  });
+
+  // Delete File or Folder
+  fastify.delete('/:id/files', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { path: reqPath } = (request.query as any) || (request.body as any);
+    const baseDir = path.resolve(`/var/lib/panelmaster/volumes/${id}`);
+
+    try {
+      const cleanSub = (reqPath || '').replace(/^\/+/, '');
+      const targetPath = path.resolve(baseDir, cleanSub);
+
+      if (!targetPath.startsWith(baseDir) || targetPath === baseDir) {
+        return reply.status(403).send({ error: 'Operación no permitida en la raíz del servidor' });
+      }
+
+      if (fs.existsSync(targetPath)) {
+        fs.rmSync(targetPath, { recursive: true, force: true });
+      }
+      return reply.send({ success: true, message: 'Elemento eliminado correctamente' });
+    } catch (err: any) {
+      return reply.status(500).send({ error: err.message });
+    }
+  });
+
+  // Rename File or Folder
+  fastify.post('/:id/files/rename', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { oldPath, newPath } = request.body as { oldPath: string; newPath: string };
+    const baseDir = path.resolve(`/var/lib/panelmaster/volumes/${id}`);
+
+    try {
+      const src = path.resolve(baseDir, (oldPath || '').replace(/^\/+/, ''));
+      const dest = path.resolve(baseDir, (newPath || '').replace(/^\/+/, ''));
+
+      if (!src.startsWith(baseDir) || !dest.startsWith(baseDir) || src === baseDir || dest === baseDir) {
+        return reply.status(403).send({ error: 'Ruta no válida' });
+      }
+
+      if (!fs.existsSync(src)) {
+        return reply.status(404).send({ error: 'El archivo de origen no existe' });
+      }
+
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.renameSync(src, dest);
+      return reply.send({ success: true, message: 'Renombrado correctamente' });
     } catch (err: any) {
       return reply.status(500).send({ error: err.message });
     }
