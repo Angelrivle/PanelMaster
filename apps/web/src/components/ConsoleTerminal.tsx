@@ -7,21 +7,28 @@ interface ConsoleTerminalProps {
   serviceId: string;
   serviceStatus: string;
   onAction: (action: 'START' | 'STOP' | 'RESTART' | 'KILL') => void;
+  onStatusChange?: (status: string) => void;
 }
 
 export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
   serviceId,
   serviceStatus,
   onAction,
+  onStatusChange,
 }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermInstance = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [isOnline, setIsOnline] = useState<boolean>(serviceStatus === 'RUNNING');
   const [commandInput, setCommandInput] = useState<string>('');
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
+
+  useEffect(() => {
+    setIsOnline(serviceStatus === 'RUNNING');
+  }, [serviceStatus]);
 
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -130,11 +137,18 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
   }, [serviceId]);
 
   const handlePowerAction = (act: 'START' | 'STOP' | 'RESTART' | 'KILL') => {
+    if (act === 'START' || act === 'RESTART') {
+      setIsOnline(true);
+      onStatusChange?.('RUNNING');
+    } else if (act === 'STOP' || act === 'KILL') {
+      setIsOnline(false);
+      onStatusChange?.('STOPPED');
+    }
+
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(`__ACTION__:${act}`);
-    } else {
-      onAction(act);
     }
+    onAction(act);
   };
 
   const sendCommand = (e: React.FormEvent) => {
@@ -198,30 +212,29 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
         <div className="flex items-center gap-2">
           <button
             onClick={() => handlePowerAction('START')}
-            disabled={serviceStatus === 'RUNNING'}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-medium transition disabled:opacity-40"
+            disabled={isOnline}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
             Iniciar
           </button>
           <button
             onClick={() => handlePowerAction('RESTART')}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-medium transition"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-semibold transition cursor-pointer"
           >
             <RotateCw className="w-3.5 h-3.5" />
             Reiniciar
           </button>
           <button
             onClick={() => handlePowerAction('STOP')}
-            disabled={serviceStatus !== 'RUNNING'}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-medium transition disabled:opacity-40"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-semibold transition cursor-pointer"
           >
             <Square className="w-3.5 h-3.5 fill-current" />
             Detener
           </button>
           <button
             onClick={() => handlePowerAction('KILL')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-800/40 rounded-lg text-xs font-medium transition"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-800/40 rounded-lg text-xs font-semibold transition cursor-pointer"
             title="Forzar detención inmediata (SIGKILL)"
           >
             <ZapOff className="w-3.5 h-3.5" />

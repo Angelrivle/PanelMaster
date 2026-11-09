@@ -115,6 +115,8 @@ export function App() {
       } catch {}
     };
     fetchServices();
+    const interval = setInterval(fetchServices, 4000);
+    return () => clearInterval(interval);
   }, [token]);
 
   // Sync URL state on mount, F5 refresh, and browser back/forward buttons

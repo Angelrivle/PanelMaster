@@ -10,7 +10,20 @@ interface ServerConsoleProps {
 
 export const ServerConsole: React.FC<ServerConsoleProps> = ({ server, onAction }) => {
   const maxRam = server.maxRamMb || server.memoryMb || 2048;
-  const isRunning = server.status === 'RUNNING';
+  const [liveStatus, setLiveStatus] = React.useState<string>(server.status || 'RUNNING');
+
+  React.useEffect(() => {
+    if (server.status) setLiveStatus(server.status);
+  }, [server.status]);
+
+  const handleStatusChange = (newStatus: string) => {
+    setLiveStatus(newStatus);
+    if (server) {
+      server.status = newStatus;
+    }
+  };
+
+  const isRunning = liveStatus === 'RUNNING';
   const serverIp =
     server.ip && server.ip !== '127.0.0.1' && server.ip !== '51.38.125.71'
       ? server.ip
@@ -48,7 +61,7 @@ export const ServerConsole: React.FC<ServerConsoleProps> = ({ server, onAction }
                     isRunning ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'
                   }`}
                 />
-                {server.status || 'RUNNING'}
+                {liveStatus}
               </span>
             </div>
             <p className="text-xs text-zinc-400 mt-1 font-mono">
@@ -68,14 +81,16 @@ export const ServerConsole: React.FC<ServerConsoleProps> = ({ server, onAction }
         cpuUsage={server.cpuUsage ?? 2.1}
         memoryUsageMb={server.ramMb ?? Math.round(maxRam * 0.38)}
         maxMemoryMb={maxRam}
-        status={server.status || 'RUNNING'}
+        status={liveStatus}
+        onStatusChange={handleStatusChange}
       />
 
       {/* Isolated Interactive Console */}
       <ConsoleTerminal
         serviceId={server.id}
-        serviceStatus={server.status || 'RUNNING'}
+        serviceStatus={liveStatus}
         onAction={onAction}
+        onStatusChange={handleStatusChange}
       />
     </div>
   );

@@ -586,7 +586,25 @@ export async function servicesRoutes(fastify: FastifyInstance) {
         orderBy: { createdAt: 'desc' },
       });
 
-      return reply.send(services.map(serializeService));
+      // Synchronize with real Docker containers (Pterodactyl Daemon Engine)
+      const dockerContainers = await dockerService.listContainers();
+      const synchronizedServices = await Promise.all(
+        services.map(async (s) => {
+          const container = dockerContainers.find((c: any) =>
+            c.Names?.some((n: string) => n === `/nexus-${s.id}` || n.includes(`nexus-${s.id}`))
+          );
+          const isOnline = !!(container && (container.State === 'running' || container.Status?.toLowerCase().startsWith('up')));
+          const actualStatus = isOnline ? 'RUNNING' : 'STOPPED';
+
+          if (s.status !== actualStatus) {
+            prisma.service.update({ where: { id: s.id }, data: { status: actualStatus } }).catch(() => {});
+            s.status = actualStatus;
+          }
+          return serializeService(s);
+        })
+      );
+
+      return reply.send(synchronizedServices);
     } catch (err: any) {
       fastify.log.error(`Error listing services: ${err.message}`);
       return reply.send([]);
@@ -615,6 +633,16 @@ export async function servicesRoutes(fastify: FastifyInstance) {
 
     if (!service) {
       return reply.status(404).send({ error: 'Service not found' });
+    }
+
+    // Inspect real Docker container state
+    const container = await dockerService.findContainerByName(`nexus-${id}`);
+    const isOnline = !!(container && (container.State === 'running' || container.Status?.toLowerCase().startsWith('up')));
+    const actualStatus = isOnline ? 'RUNNING' : 'STOPPED';
+
+    if (service.status !== actualStatus) {
+      prisma.service.update({ where: { id: service.id }, data: { status: actualStatus } }).catch(() => {});
+      service.status = actualStatus;
     }
 
     return reply.send(serializeService(service));
@@ -819,7 +847,12 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     let container = await dockerService.findContainerByName(containerName);
 
     if (action === 'STOP') {
-      if (container) await dockerService.stopContainer(container.Id);
+      if (container) {
+        try {
+          await dockerService.execCommand(container.Id, 'stop');
+        } catch {}
+        await dockerService.stopContainer(container.Id);
+      }
     } else if (action === 'KILL') {
       if (container) await dockerService.killContainer(container.Id);
     } else if (action === 'START' || action === 'RESTART') {
@@ -923,9 +956,13 @@ export async function servicesRoutes(fastify: FastifyInstance) {
           wsClient.send(recentLogs);
         }
 
-        if (container.State === 'running') {
+        if (container.State === 'running' || container.Status?.toLowerCase().startsWith('up')) {
+          prisma.service.updateMany({ where: { id }, data: { status: 'RUNNING' } }).catch(() => {});
+          prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'RUNNING' } }).catch(() => {});
           attachLogs(container.Id);
         } else {
+          prisma.service.updateMany({ where: { id }, data: { status: 'STOPPED' } }).catch(() => {});
+          prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'STOPPED' } }).catch(() => {});
           if (wsClient.readyState === WebSocket.OPEN) {
             wsClient.send('\r\n\x1b[33m[PanelMaster] El servidor se encuentra apagado. Pulsa "Iniciar" para encenderlo.\x1b[0m\r\n');
           }

@@ -8,6 +8,7 @@ interface MetricsChartProps {
   memoryUsageMb?: number;
   maxMemoryMb?: number;
   status?: string;
+  onStatusChange?: (status: string) => void;
 }
 
 export const MetricsChart: React.FC<MetricsChartProps> = ({
@@ -16,8 +17,16 @@ export const MetricsChart: React.FC<MetricsChartProps> = ({
   memoryUsageMb: fallbackRam = 0,
   maxMemoryMb: fallbackMaxRam = 2048,
   status = 'RUNNING',
+  onStatusChange,
 }) => {
-  const isRunning = status === 'RUNNING';
+  const [isOnline, setIsOnline] = useState<boolean>(status === 'RUNNING');
+
+  useEffect(() => {
+    if (status === 'RUNNING') setIsOnline(true);
+    else if (status === 'STOPPED') setIsOnline(false);
+  }, [status]);
+
+  const isRunning = isOnline || status === 'RUNNING';
 
   const [realCpu, setRealCpu] = useState<number>(fallbackCpu);
   const [realRamMb, setRealRamMb] = useState<number>(fallbackRam);
@@ -56,6 +65,15 @@ export const MetricsChart: React.FC<MetricsChartProps> = ({
         });
         if (res.ok && isMounted) {
           const data = await res.json();
+          if (typeof data.isOnline === 'boolean') {
+            setIsOnline(data.isOnline);
+            if (data.isOnline && status !== 'RUNNING') {
+              onStatusChange?.('RUNNING');
+            } else if (!data.isOnline && status === 'RUNNING') {
+              onStatusChange?.('STOPPED');
+            }
+          }
+
           const cpu = Number(data.cpuPercent) || (data.isOnline ? 1.2 : 0);
           const rawRam = data.memoryUsageBytes ? Math.round(data.memoryUsageBytes / (1024 * 1024)) : 0;
           const limit = data.memoryLimitBytes ? Math.round(data.memoryLimitBytes / (1024 * 1024)) : maxRamMb;
