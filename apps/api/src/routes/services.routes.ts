@@ -438,17 +438,33 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     const baseDir = path.resolve(`/var/lib/panelmaster/volumes/${id}`);
 
     let deletedCount = 0;
-    for (const p of paths) {
-      try {
-        const clean = (p || '').replace(/^\/+/, '');
-        if (!clean) continue;
-        const targetPath = path.resolve(baseDir, clean);
-        if (targetPath.startsWith(baseDir) && targetPath !== baseDir && fs.existsSync(targetPath)) {
-          fs.rmSync(targetPath, { recursive: true, force: true });
-          deletedCount++;
+
+    // Check if wiping whole directory
+    if (paths.includes('/') || paths.includes('*') || paths.includes('.')) {
+      if (fs.existsSync(baseDir)) {
+        try {
+          const items = fs.readdirSync(baseDir);
+          for (const item of items) {
+            try {
+              fs.rmSync(path.join(baseDir, item), { recursive: true, force: true });
+              deletedCount++;
+            } catch {}
+          }
+        } catch {}
+      }
+    } else {
+      for (const p of paths) {
+        try {
+          const clean = (p || '').replace(/^\/+/, '');
+          if (!clean) continue;
+          const targetPath = path.resolve(baseDir, clean);
+          if (targetPath.startsWith(baseDir) && targetPath !== baseDir && fs.existsSync(targetPath)) {
+            fs.rmSync(targetPath, { recursive: true, force: true });
+            deletedCount++;
+          }
+        } catch (err: any) {
+          fastify.log.error(`[Delete Batch Error on ${p}]: ${err.message}`);
         }
-      } catch (err: any) {
-        fastify.log.error(`[Delete Batch Error on ${p}]: ${err.message}`);
       }
     }
 
@@ -776,12 +792,12 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     const containerName = `nexus-${id}`;
     let container = await dockerService.findContainerByName(containerName);
 
-    if (container) {
-      if (action === 'START') await dockerService.startContainer(container.Id);
-      if (action === 'STOP') await dockerService.stopContainer(container.Id);
-      if (action === 'RESTART') await dockerService.restartContainer(container.Id);
-      if (action === 'KILL') await dockerService.killContainer(container.Id);
-    } else if (action === 'START') {
+    if (action === 'STOP') {
+      if (container) await dockerService.stopContainer(container.Id);
+    } else if (action === 'KILL') {
+      if (container) await dockerService.killContainer(container.Id);
+    } else if (action === 'START' || action === 'RESTART') {
+      // Recreate container to always apply latest config, variables, and Java versions
       await dockerService.createServiceContainer({
         serviceId: id,
         name: id,

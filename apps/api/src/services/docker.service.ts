@@ -435,7 +435,7 @@ export class DockerService {
 
     const envMap: Record<string, string> = {
       EULA: 'TRUE',
-      ...(isModpack ? {} : { TYPE: serverType }),
+      ...(isModpack ? { TYPE: 'MODRINTH' } : { TYPE: serverType }),
       VERSION: serverVersion,
       ONLINE_MODE: 'FALSE',
       MAX_PLAYERS: '20',
@@ -451,11 +451,12 @@ export class DockerService {
       JVM_XX_OPTS: '-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC',
       ...(isModpack
         ? {
-            MOD_PLATFORM: savedConfig.modPlatform || 'MODRINTH',
-            MODPACK_PLATFORM: savedConfig.modPlatform || 'MODRINTH',
             MODRINTH_MODPACK: savedConfig.modpack,
-            MODRINTH_VERSION_TYPE: 'release,beta,alpha',
+            MODRINTH_DEFAULT_VERSION_TYPE: 'alpha',
+            MODRINTH_MODPACK_VERSION_TYPE: 'alpha',
+            MODRINTH_VERSION_TYPE: 'alpha',
             MODRINTH_ALLOWED_VERSION_TYPE: 'alpha',
+            MODPACK_DEFAULT_VERSION_TYPE: 'alpha',
             ...(savedConfig.modpackVersion && savedConfig.modpackVersion !== 'latest'
               ? { MODRINTH_VERSION: savedConfig.modpackVersion }
               : {}),

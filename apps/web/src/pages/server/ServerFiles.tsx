@@ -157,7 +157,7 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
       });
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           setFileSystem(data);
         }
       }
@@ -535,9 +535,11 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
             body: JSON.stringify({ paths: pathsArray }),
           });
           if (!res.ok) throw new Error('Error al eliminar archivos');
-          toast.success(`¡${pathsArray.length} elementos eliminados definitivamente!`);
-          setOpenTabs((prev) => prev.filter((t) => !selectedPaths.has(t.path)));
+          const deletedSet = new Set(selectedPaths);
           setSelectedPaths(new Set());
+          setOpenTabs((prev) => prev.filter((t) => !deletedSet.has(t.path)));
+          setFileSystem((prev) => prev.filter((item) => !deletedSet.has(item.path)));
+          toast.success(`¡${pathsArray.length} elementos eliminados definitivamente!`);
           await fetchFiles();
         } catch (err: any) {
           toast.error(err.message || 'Error al eliminar');
@@ -668,14 +670,20 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
             }`}
           >
             <div className="flex items-center gap-2 truncate">
-              {/* Checkbox for item selection */}
-              <input
-                type="checkbox"
-                checked={selectedPaths.has(item.path)}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => toggleSelect(item.path, e.target.checked)}
-                className="w-3.5 h-3.5 rounded bg-zinc-800 border-zinc-700 text-blue-500 focus:ring-0 cursor-pointer shrink-0"
-              />
+              {/* Custom Styled Checkbox for item selection */}
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleSelect(item.path, !selectedPaths.has(item.path));
+                }}
+                className={`w-3.5 h-3.5 rounded flex items-center justify-center transition border shrink-0 cursor-pointer ${
+                  selectedPaths.has(item.path)
+                    ? 'bg-blue-600 border-blue-500 text-white shadow-sm shadow-blue-500/30'
+                    : 'bg-[#141418] border-[#2e2e38] text-transparent hover:border-zinc-500'
+                }`}
+              >
+                <Check className="w-2.5 h-2.5 stroke-[3]" />
+              </div>
 
               {item.isDir ? (
                 <span
@@ -871,17 +879,25 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
 
           {/* Multi-Selection Control Bar (Pterodactyl Style) */}
           <div className="px-3 py-1.5 bg-[#070709] border-b border-[#18181b] flex items-center justify-between text-xs select-none shrink-0">
-            <label className="flex items-center gap-2 cursor-pointer text-zinc-400 hover:text-zinc-200">
-              <input
-                type="checkbox"
-                checked={fileSystem.length > 0 && selectedPaths.size === fileSystem.length}
-                onChange={toggleSelectAll}
-                className="w-3.5 h-3.5 rounded bg-zinc-800 border-zinc-700 text-blue-500 focus:ring-0 cursor-pointer"
-              />
+            <div
+              onClick={toggleSelectAll}
+              className="flex items-center gap-2 cursor-pointer text-zinc-400 hover:text-zinc-200 group"
+            >
+              <div
+                className={`w-3.5 h-3.5 rounded flex items-center justify-center transition border shrink-0 ${
+                  fileSystem.length > 0 && selectedPaths.size === fileSystem.length
+                    ? 'bg-blue-600 border-blue-500 text-white shadow-sm shadow-blue-500/30'
+                    : selectedPaths.size > 0
+                    ? 'bg-blue-600/40 border-blue-500 text-white'
+                    : 'bg-[#141418] border-[#2e2e38] text-transparent group-hover:border-zinc-500'
+                }`}
+              >
+                <Check className="w-2.5 h-2.5 stroke-[3]" />
+              </div>
               <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">
                 {selectedPaths.size > 0 ? `${selectedPaths.size} seleccionados` : 'Seleccionar Todo'}
               </span>
-            </label>
+            </div>
             <span className="font-mono text-[10px] text-zinc-500">{fileSystem.length} ítems</span>
           </div>
 

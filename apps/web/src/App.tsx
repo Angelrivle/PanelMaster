@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './pages/Dashboard';
 import { AdminPanel } from './pages/AdminPanel';
@@ -41,7 +41,25 @@ export function App() {
   };
 
   const [currentView, setCurrentView] = useState<string>('dashboard');
+  const [selectedServer, setSelectedServer] = useState<any | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+
+  // Parse URL path helper (Pterodactyl URL standard: /server/:id/:tab, /admin/:tab, /account)
+  const parseUrl = useCallback(() => {
+    const path = window.location.pathname.replace(/\/+$/, '') || '/';
+    const serverMatch = path.match(/^\/server\/([^\/]+)(?:\/([^\/]+))?/);
+    if (serverMatch) {
+      return { serverId: serverMatch[1], tab: serverMatch[2] || 'console' };
+    }
+    if (path.startsWith('/admin')) {
+      const adminTab = path.replace('/admin', '').replace(/^\//, '');
+      return { serverId: null, tab: adminTab ? `admin-${adminTab}` : 'admin' };
+    }
+    if (path === '/account') {
+      return { serverId: null, tab: 'account' };
+    }
+    return { serverId: null, tab: 'dashboard' };
+  }, []);
 
   // Persistent servers state
   const [servers, setServers] = useState<any[]>(() => {
@@ -99,7 +117,48 @@ export function App() {
     fetchServices();
   }, [token]);
 
-  const [selectedServer, setSelectedServer] = useState<any | null>(null);
+  // Sync URL state on mount, F5 refresh, and browser back/forward buttons
+  useEffect(() => {
+    const handleLocationChange = () => {
+      const { serverId, tab } = parseUrl();
+      setCurrentView(tab);
+
+      if (serverId) {
+        const found = servers.find((s) => s.id === serverId || s.name === serverId);
+        if (found) {
+          setSelectedServer(found);
+        } else {
+          const currentToken = localStorage.getItem('nexus_token');
+          fetch(`/api/v1/services/${serverId}`, {
+            headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : {},
+          })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((srv) => {
+              if (srv) {
+                const mem = srv.memoryLimitBytes ? Math.round(srv.memoryLimitBytes / (1024 * 1024)) : 2048;
+                setSelectedServer({
+                  ...srv,
+                  maxRamMb: mem,
+                  ramMb: Math.round(mem * 0.35),
+                  ram: `${((mem * 0.35) / 1024).toFixed(1)} / ${(mem / 1024).toFixed(0)} GB`,
+                  egg: srv.template?.name || 'Minecraft Java (Paper)',
+                  port: srv.instances?.[0]?.ports?.[0]?.port || 25565,
+                  node: srv.instances?.[0]?.node?.name || 'node-01',
+                  ip: srv.instances?.[0]?.node?.fqdn || '127.0.0.1',
+                });
+              }
+            })
+            .catch(() => {});
+        }
+      } else {
+        setSelectedServer(null);
+      }
+    };
+
+    handleLocationChange();
+    window.addEventListener('popstate', handleLocationChange);
+    return () => window.removeEventListener('popstate', handleLocationChange);
+  }, [servers, parseUrl]);
 
   const handleLoginSuccess = (newToken: string, loggedUser: any) => {
     setToken(newToken);
@@ -117,8 +176,42 @@ export function App() {
     setSelectedServer(srv);
     if (srv) {
       setCurrentView('console');
+      const targetUrl = `/server/${srv.id}/console`;
+      if (window.location.pathname !== targetUrl) {
+        window.history.pushState(null, '', targetUrl);
+      }
     } else {
       setCurrentView('dashboard');
+      if (window.location.pathname !== '/') {
+        window.history.pushState(null, '', '/');
+      }
+    }
+  };
+
+  const handleNavigate = (view: string) => {
+    setCurrentView(view);
+    if (view === 'dashboard') {
+      setSelectedServer(null);
+      if (window.location.pathname !== '/') {
+        window.history.pushState(null, '', '/');
+      }
+    } else if (view === 'account') {
+      setSelectedServer(null);
+      if (window.location.pathname !== '/account') {
+        window.history.pushState(null, '', '/account');
+      }
+    } else if (view.startsWith('admin')) {
+      setSelectedServer(null);
+      const sub = view === 'admin' ? '' : `/${view.replace('admin-', '')}`;
+      const targetUrl = `/admin${sub}`;
+      if (window.location.pathname !== targetUrl) {
+        window.history.pushState(null, '', targetUrl);
+      }
+    } else if (selectedServer) {
+      const targetUrl = `/server/${selectedServer.id}/${view}`;
+      if (window.location.pathname !== targetUrl) {
+        window.history.pushState(null, '', targetUrl);
+      }
     }
   };
 
@@ -163,6 +256,7 @@ export function App() {
     localStorage.setItem('pm_servers_cache', JSON.stringify(updated));
     setSelectedServer(serverObj);
     setCurrentView('console');
+    window.history.pushState(null, '', `/server/${serverObj.id}/console`);
   };
 
   if (!token) {
@@ -180,12 +274,7 @@ export function App() {
       {/* Sidebar matching the screenshots */}
       <Sidebar
         currentView={currentView}
-        onNavigate={(view) => {
-          setCurrentView(view);
-          if (view === 'dashboard' || view === 'admin' || view === 'account') {
-            setSelectedServer(null);
-          }
-        }}
+        onNavigate={handleNavigate}
         selectedServer={selectedServer}
         onSelectServer={handleSelectServer}
         allServers={servers}
@@ -210,9 +299,9 @@ export function App() {
         {currentView.startsWith('admin') && (
           <AdminPanel
             servers={servers}
-            onBackToDashboard={() => setCurrentView('dashboard')}
+            onBackToDashboard={() => handleNavigate('dashboard')}
             activeTab={currentView === 'admin' ? 'overview' : currentView.replace('admin-', '')}
-            onTabChange={(tab) => setCurrentView(`admin-${tab}`)}
+            onTabChange={(tab) => handleNavigate(`admin-${tab}`)}
             onUpdateServers={(updated) => setServers(updated)}
             onOpenCreateServer={() => setIsCreateModalOpen(true)}
             user={user}
@@ -224,7 +313,7 @@ export function App() {
           <AccountSettings
             user={user}
             onUpdateUser={(updated) => setUser(updated)}
-            onBackToDashboard={() => setCurrentView('dashboard')}
+            onBackToDashboard={() => handleNavigate('dashboard')}
             language={language}
           />
         )}
