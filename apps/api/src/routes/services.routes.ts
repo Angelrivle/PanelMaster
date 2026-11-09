@@ -416,59 +416,98 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     // Clean, elegant greeting without spam
     wsClient.send(`\x1b[1;36m[PanelMaster]\x1b[0m Conectado a la consola segura de \x1b[1;37m${srvName}\x1b[0m\r\n\r\n`);
 
-    let dockerContainer = await dockerService.findContainerByName(containerName);
+    let activeStream: { abort: () => void } | null = null;
+    let isWsClosed = false;
 
-    if (!dockerContainer && dockerService.isAvailable()) {
-      const created = await dockerService.createServiceContainer({
-        serviceId: id,
-        name: srvName,
-        image: 'itzg/minecraft-server:latest',
-        port: 25565,
-        memoryMb: 2048,
-        startNow: true,
-      });
-      if (created && created.Id) {
-        dockerContainer = { Id: created.Id };
+    // Auto-reconnecting live log streamer
+    const startStreaming = async () => {
+      if (isWsClosed) return;
+      if (activeStream) {
+        try { activeStream.abort(); } catch {}
+        activeStream = null;
       }
-    }
 
-    if (dockerContainer) {
-      const logStream = dockerService.streamLogs(
-        dockerContainer.Id,
+      let container = await dockerService.findContainerByName(containerName);
+
+      if (!container && dockerService.isAvailable()) {
+        const created = await dockerService.createServiceContainer({
+          serviceId: id,
+          name: srvName,
+          port: 25565,
+          startNow: true,
+        });
+        if (created && created.Id) {
+          container = { Id: created.Id };
+        }
+      }
+
+      if (!container) {
+        if (!isWsClosed) setTimeout(startStreaming, 1500);
+        return;
+      }
+
+      activeStream = dockerService.streamLogs(
+        container.Id,
         (chunk) => {
           if (wsClient.readyState === WebSocket.OPEN) {
             wsClient.send(chunk);
           }
         },
-        () => {}
+        () => {
+          // If the container stopped or restarted, auto re-attach stream in 1.5s
+          if (!isWsClosed) {
+            setTimeout(startStreaming, 1500);
+          }
+        }
       );
+    };
 
-      wsClient.on('close', () => {
-        logStream.abort();
-      });
+    startStreaming();
 
-      // Handle terminal commands and forward to container
-      wsClient.on('message', async (data: any) => {
-        const raw = data.toString().trim();
-        if (!raw) return;
+    wsClient.on('close', () => {
+      isWsClosed = true;
+      if (activeStream) {
+        try { activeStream.abort(); } catch {}
+      }
+    });
 
-        // Internal action events - handled silently without printing to terminal
-        if (raw.startsWith('__ACTION__:')) {
-          const act = raw.replace('__ACTION__:', '');
-          if (act === 'START') await dockerService.startContainer(dockerContainer.Id);
-          if (act === 'STOP') await dockerService.stopContainer(dockerContainer.Id);
-          if (act === 'RESTART') await dockerService.restartContainer(dockerContainer.Id);
-          return;
+    // Handle terminal commands and forward to container
+    wsClient.on('message', async (data: any) => {
+      const raw = data.toString().trim();
+      if (!raw) return;
+
+      const container = await dockerService.findContainerByName(containerName);
+
+      // Handle power actions silently
+      if (raw.startsWith('__ACTION__:')) {
+        const act = raw.replace('__ACTION__:', '');
+        if (container) {
+          if (act === 'START') await dockerService.startContainer(container.Id);
+          if (act === 'STOP') await dockerService.stopContainer(container.Id);
+          if (act === 'RESTART') await dockerService.restartContainer(container.Id);
+        } else if (act === 'START') {
+          await dockerService.createServiceContainer({
+            serviceId: id,
+            name: srvName,
+            startNow: true,
+          });
         }
+        setTimeout(startStreaming, 1000);
+        return;
+      }
 
-        // Forward real command to container via rcon-cli
-        const res = await dockerService.execCommand(dockerContainer.Id, raw);
-        if (res && wsClient.readyState === WebSocket.OPEN) {
-          wsClient.send(`${res}\r\n`);
+      // Execute command on container
+      if (!container) {
+        if (wsClient.readyState === WebSocket.OPEN) {
+          wsClient.send('\x1b[33m[PanelMaster]: El servidor aún no está en ejecución. Inicia el servidor para enviar comandos.\x1b[0m\r\n');
         }
-      });
-    } else {
-      wsClient.send(`\x1b[33m[PanelMaster]\x1b[0m Esperando inicialización del contenedor en Docker...\r\n`);
-    }
+        return;
+      }
+
+      const res = await dockerService.execCommand(container.Id, raw);
+      if (res && wsClient.readyState === WebSocket.OPEN) {
+        wsClient.send(res.endsWith('\r\n') ? res : `${res}\r\n`);
+      }
+    });
   });
 }

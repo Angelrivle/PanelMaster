@@ -104,15 +104,6 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
   }, [serviceId]);
 
   const handlePowerAction = (act: 'START' | 'STOP' | 'RESTART') => {
-    if (xtermInstance.current) {
-      if (act === 'START') {
-        xtermInstance.current.writeln('\r\n\x1b[1;33m[PanelMaster]\x1b[0m Enviando comando START a Docker host...');
-      } else if (act === 'RESTART') {
-        xtermInstance.current.writeln('\r\n\x1b[1;33m[PanelMaster]\x1b[0m Enviando comando RESTART a Docker host...');
-      } else if (act === 'STOP') {
-        xtermInstance.current.writeln('\r\n\x1b[1;31m[PanelMaster]\x1b[0m Enviando comando STOP a Docker host...');
-      }
-    }
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(`__ACTION__:${act}`);
     }
@@ -121,9 +112,14 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
 
   const sendCommand = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!commandInput.trim() || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
+    const clean = commandInput.trim();
+    if (!clean || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
 
-    socketRef.current.send(commandInput + '\n');
+    if (xtermInstance.current) {
+      xtermInstance.current.writeln(`\x1b[1;36m>\x1b[0m ${clean}`);
+    }
+
+    socketRef.current.send(clean);
     setCommandInput('');
   };
 

@@ -333,6 +333,8 @@ export class DockerService {
       MAX_PLAYERS: '20',
       ENABLE_RCON: 'true',
       RCON_PASSWORD: 'panelmaster-rcon',
+      RCON_PORT: '25575',
+      BROADCAST_RCON_TO_OPS: 'false',
       INIT_MEMORY: `${Math.min(1024, jvmHeapMb)}M`,
       MAX_MEMORY: `${jvmHeapMb}M`,
       MEMORY: `${jvmHeapMb}M`,
@@ -419,13 +421,20 @@ export class DockerService {
   }
 
   async execCommand(containerId: string, cmd: string): Promise<string> {
-    if (!this.isAvailable() || !cmd.trim()) return '';
+    const cleanCmd = cmd.trim();
+    if (!this.isAvailable() || !cleanCmd) return '';
     try {
+      // Escape command for shell execution
+      const escapedCmd = cleanCmd.replace(/(["\\$`])/g, '\\$1');
       const execObj = await this.request(`/containers/${containerId}/exec`, 'POST', {
         AttachStdout: true,
         AttachStderr: true,
         Tty: false,
-        Cmd: ['rcon-cli', cmd],
+        Cmd: [
+          'sh',
+          '-c',
+          `rcon-cli --host 127.0.0.1 --port 25575 --password panelmaster-rcon "${escapedCmd}"`,
+        ],
       });
 
       if (execObj && execObj.Id) {
@@ -433,7 +442,28 @@ export class DockerService {
           Detach: false,
           Tty: false,
         });
-        return typeof out === 'string' ? out : '';
+        const outStr = typeof out === 'string' ? out.trim() : '';
+
+        // If RCON connection refused (server is starting up, shutting down, or not ready yet)
+        if (
+          outStr.includes('connection refused') ||
+          outStr.includes('Failed to connect to RCON') ||
+          outStr.includes('dial tcp')
+        ) {
+          // Direct fallback to console stdin via PID 1
+          try {
+            await this.request(`/containers/${containerId}/exec`, 'POST', {
+              AttachStdout: false,
+              AttachStderr: false,
+              Tty: false,
+              Cmd: ['sh', '-c', `echo "${escapedCmd}" > /proc/1/fd/0 2>/dev/null || true`],
+            });
+          } catch {}
+
+          return '\x1b[33m[PanelMaster]: El servidor aún se está iniciando o la consola no está lista para RCON. Espera unos segundos.\x1b[0m';
+        }
+
+        return outStr;
       }
     } catch (err: any) {
       console.error(`[DockerService] Exec error: ${err.message}`);
@@ -460,11 +490,15 @@ export class DockerService {
       }
     } catch {}
 
+    const savedConfig = this.getServerConfig(serviceId);
+    const configuredMemoryMb = savedConfig.memoryMb || 2048;
+    const configuredMemoryLimitBytes = configuredMemoryMb * 1024 * 1024;
+
     if (!container || !this.isAvailable()) {
       return {
         cpuPercent: 0,
         memoryUsageBytes: 0,
-        memoryLimitBytes: 2048 * 1024 * 1024,
+        memoryLimitBytes: configuredMemoryLimitBytes,
         diskUsageBytes,
         diskLimitBytes,
         networkRxBytes: 0,
@@ -489,9 +523,14 @@ export class DockerService {
         cpuPercent = (cpuDelta / systemDelta) * onlineCpus * 100.0;
       }
 
-      // 2. Memory
-      const memoryUsageBytes = stats.memory_stats?.usage || 0;
-      const memoryLimitBytes = stats.memory_stats?.limit || 2048 * 1024 * 1024;
+      // 2. Memory: Subtract Linux page cache (inactive_file) to get real active JVM memory
+      const rawUsage = stats.memory_stats?.usage || 0;
+      const inactiveFile =
+        stats.memory_stats?.stats?.inactive_file ||
+        stats.memory_stats?.stats?.total_inactive_file ||
+        0;
+      const memoryUsageBytes = Math.max(0, rawUsage - inactiveFile);
+      const memoryLimitBytes = configuredMemoryLimitBytes;
 
       // 3. Network I/O
       let networkRxBytes = 0;
