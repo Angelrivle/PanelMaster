@@ -928,26 +928,27 @@ export async function servicesRoutes(fastify: FastifyInstance) {
         const act = raw.replace('__ACTION__:', '');
         stopActiveStream();
 
-        if (act === 'START') {
+        if (act === 'START' || act === 'RESTART') {
           if (wsClient.readyState === WebSocket.OPEN) {
-            wsClient.send('\r\n\x1b[36m[PanelMaster] Iniciando servidor...\x1b[0m\r\n');
+            wsClient.send(`\r\n\x1b[36m[PanelMaster] ${act === 'START' ? 'Iniciando' : 'Reiniciando'} servidor...\x1b[0m\r\n`);
           }
           await prisma.service.updateMany({ where: { id }, data: { status: 'RUNNING' } });
           await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'RUNNING' } });
 
-          let cur = await dockerService.findContainerByName(containerName);
-          if (cur) {
-            await dockerService.startContainer(cur.Id);
-            setTimeout(() => attachLogs(cur.Id), 600);
+          // Always ensure the container is cleanly created or restarted with latest config
+          const container = await dockerService.createServiceContainer({
+            serviceId: id,
+            name: srvName,
+            port: 25565,
+            startNow: true,
+          });
+
+          if (container && container.Id) {
+            attachLogs(container.Id);
           } else {
-            const created = await dockerService.createServiceContainer({
-              serviceId: id,
-              name: srvName,
-              port: 25565,
-              startNow: true,
-            });
-            if (created && created.Id) {
-              setTimeout(() => attachLogs(created.Id), 600);
+            const found = await dockerService.findContainerByName(containerName);
+            if (found) {
+              attachLogs(found.Id);
             }
           }
         } else if (act === 'STOP') {
@@ -960,28 +961,6 @@ export async function servicesRoutes(fastify: FastifyInstance) {
           const cur = await dockerService.findContainerByName(containerName);
           if (cur) {
             await dockerService.stopContainer(cur.Id);
-          }
-        } else if (act === 'RESTART') {
-          if (wsClient.readyState === WebSocket.OPEN) {
-            wsClient.send('\r\n\x1b[36m[PanelMaster] Reiniciando servidor...\x1b[0m\r\n');
-          }
-          await prisma.service.updateMany({ where: { id }, data: { status: 'RUNNING' } });
-          await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'RUNNING' } });
-
-          let cur = await dockerService.findContainerByName(containerName);
-          if (cur) {
-            await dockerService.restartContainer(cur.Id);
-            setTimeout(() => attachLogs(cur.Id), 600);
-          } else {
-            const created = await dockerService.createServiceContainer({
-              serviceId: id,
-              name: srvName,
-              port: 25565,
-              startNow: true,
-            });
-            if (created && created.Id) {
-              setTimeout(() => attachLogs(created.Id), 600);
-            }
           }
         } else if (act === 'KILL') {
           if (wsClient.readyState === WebSocket.OPEN) {

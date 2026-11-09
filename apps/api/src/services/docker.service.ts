@@ -787,6 +787,10 @@ export class DockerService {
           method: 'GET',
         },
         (res) => {
+          if (res.statusCode && res.statusCode >= 400) {
+            resolve('');
+            return;
+          }
           const chunks: Buffer[] = [];
           res.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
           res.on('end', () => {
@@ -794,7 +798,7 @@ export class DockerService {
             let cleaned = '';
             let offset = 0;
             while (offset < raw.length) {
-              if (raw.length - offset >= 8 && (raw[offset] === 1 || raw[offset] === 2)) {
+              if (raw.length - offset >= 8 && (raw[offset] === 1 || raw[offset] === 2) && raw[offset + 1] === 0) {
                 const frameLen = raw.readUInt32BE(offset + 4);
                 const frameStart = offset + 8;
                 const frameEnd = Math.min(raw.length, frameStart + frameLen);
@@ -805,7 +809,11 @@ export class DockerService {
                 break;
               }
             }
-            resolve(cleaned);
+            if (cleaned.startsWith('{"message":')) {
+              resolve('');
+            } else {
+              resolve(cleaned);
+            }
           });
         }
       );
@@ -832,11 +840,17 @@ export class DockerService {
         method: 'GET',
       },
       (res) => {
+        if (res.statusCode && res.statusCode >= 400) {
+          onEnd();
+          return;
+        }
+
         res.on('data', (chunk) => {
           let str = chunk.toString('utf-8');
-          if (chunk.length > 8 && (chunk[0] === 1 || chunk[0] === 2)) {
+          if (chunk.length > 8 && (chunk[0] === 1 || chunk[0] === 2) && chunk[1] === 0 && chunk[2] === 0 && chunk[3] === 0) {
             str = chunk.slice(8).toString('utf-8');
           }
+          if (str.startsWith('{"message":')) return;
           onData(str);
         });
         res.on('end', onEnd);

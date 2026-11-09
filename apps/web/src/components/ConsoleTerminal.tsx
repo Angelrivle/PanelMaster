@@ -82,7 +82,10 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
 
       ws.onmessage = (event) => {
         if (!isMounted) return;
-        term.write(event.data);
+        const text = typeof event.data === 'string' ? event.data : '';
+        // Normalize line endings for xterm so lines don't stair-step horizontally
+        const formatted = text.replace(/\r?\n/g, '\r\n');
+        term.write(formatted);
       };
 
       ws.onclose = () => {
@@ -129,8 +132,9 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
   const handlePowerAction = (act: 'START' | 'STOP' | 'RESTART' | 'KILL') => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(`__ACTION__:${act}`);
+    } else {
+      onAction(act);
     }
-    onAction(act);
   };
 
   const sendCommand = (e: React.FormEvent) => {
