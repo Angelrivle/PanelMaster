@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Server,
@@ -378,7 +378,36 @@ export const CreateServiceModal: React.FC<CreateServiceModalProps> = ({
   const [oomKiller, setOomKiller] = useState(true);
 
   // Step 4: Network & Allocations
-  const [selectedNode, setSelectedNode] = useState(nodes[0]?.name || 'node-01');
+  const [availableNodes, setAvailableNodes] = useState<any[]>(() => {
+    if (nodes && nodes.length > 0) return nodes;
+    const cached = localStorage.getItem('pm_nodes_cache');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {}
+    }
+    return [{ id: 'node-01', name: 'node-01', fqdn: 'panel.zenforge.online', location: 'Local Node' }];
+  });
+
+  const [selectedNode, setSelectedNode] = useState(() => {
+    return availableNodes[0]?.name || availableNodes[0]?.id || 'node-01';
+  });
+
+  useEffect(() => {
+    const token = localStorage.getItem('nexus_token');
+    fetch('/api/v1/nodes', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setAvailableNodes(data);
+          setSelectedNode(data[0].name || data[0].id);
+        }
+      })
+      .catch(() => {});
+  }, []);
   const [primaryPort, setPrimaryPort] = useState(selectedEgg.defaultPort);
   const [allocationCount, setAllocationCount] = useState(1);
 
@@ -933,9 +962,11 @@ export const CreateServiceModal: React.FC<CreateServiceModalProps> = ({
                     onChange={(e) => setSelectedNode(e.target.value)}
                     className="w-full bg-[#09090b] border border-[#27272a] rounded-xl px-3.5 py-2.5 text-xs text-zinc-100 font-mono focus:outline-none focus:border-blue-500"
                   >
-                    <option value="node-01">node-01 (51.38.125.71 - Local Node)</option>
-                    <option value="node-us-east">node-us-east (192.168.1.10 - Dallas Cluster)</option>
-                    <option value="node-eu-central">node-eu-central (51.38.100.5 - Frankfurt)</option>
+                    {availableNodes.map((n: any) => (
+                      <option key={n.id || n.name} value={n.name || n.id}>
+                        {n.name} ({n.fqdn || '127.0.0.1'} - {n.region?.name || n.location || 'Online'})
+                      </option>
+                    ))}
                   </select>
                 </div>
 

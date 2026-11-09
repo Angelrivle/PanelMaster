@@ -100,17 +100,11 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
   const handlePowerAction = (act: 'START' | 'STOP' | 'RESTART') => {
     if (xtermInstance.current) {
       if (act === 'START') {
-        xtermInstance.current.writeln('\r\n\x1b[1;33m[PanelMaster]\x1b[0m Iniciando servidor...');
-        xtermInstance.current.writeln('[Server thread/INFO] [PanelMaster]: Preparando archivos del servidor...');
-        xtermInstance.current.writeln('[Server thread/INFO] [PanelMaster]: Proceso iniciado en puerto asignado (TCP 25565)');
-        xtermInstance.current.writeln('[Server thread/INFO] [Minecraft]: Loading server libraries & world data');
-        xtermInstance.current.writeln('[Server thread/INFO] [Minecraft]: \x1b[1;32mDone! Servidor listo para recibir conexiones. Escribe "help" para ver comandos.\x1b[0m');
+        xtermInstance.current.writeln('\r\n\x1b[1;33m[PanelMaster]\x1b[0m Enviando comando START a Docker host...');
       } else if (act === 'RESTART') {
-        xtermInstance.current.writeln('\r\n\x1b[1;33m[PanelMaster]\x1b[0m Reiniciando servidor...');
-        xtermInstance.current.writeln('[Server thread/INFO] [PanelMaster]: Proceso reiniciado.');
+        xtermInstance.current.writeln('\r\n\x1b[1;33m[PanelMaster]\x1b[0m Enviando comando RESTART a Docker host...');
       } else if (act === 'STOP') {
-        xtermInstance.current.writeln('\r\n\x1b[1;31m[PanelMaster]\x1b[0m Deteniendo servidor... Guardando estado del mundo...');
-        xtermInstance.current.writeln('[Server thread/INFO] [PanelMaster]: Servidor detenido correctamente.');
+        xtermInstance.current.writeln('\r\n\x1b[1;31m[PanelMaster]\x1b[0m Enviando comando STOP a Docker host...');
       }
     }
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {

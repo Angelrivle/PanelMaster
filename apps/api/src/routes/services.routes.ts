@@ -2,11 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import WebSocket from 'ws';
 import { prisma } from '../prisma';
-import { Orchestrator } from '../services/orchestrator';
-import { AgentClient } from '../services/agent-client';
 import { dockerService } from '../services/docker.service';
-
-const orchestrator = new Orchestrator();
 
 function serializeService(s: any) {
   return {
@@ -183,7 +179,7 @@ export async function servicesRoutes(fastify: FastifyInstance) {
         nodeId: node.id,
         containerId: `nexus-${service.id}`,
         containerName: `nexus-${service.id}`,
-        hostDataPath: `/var/lib/nexuspanel/volumes/${service.id}`,
+        hostDataPath: `/var/lib/panelmaster/volumes/${service.id}`,
         status: service.status,
         startedAt: new Date(),
       },
@@ -199,6 +195,22 @@ export async function servicesRoutes(fastify: FastifyInstance) {
         isPrimary: true,
       },
     });
+
+    // Spawn REAL Docker container on host
+    try {
+      await dockerService.createServiceContainer({
+        serviceId: service.id,
+        name: service.name,
+        image: version.dockerImage || 'itzg/minecraft-server:latest',
+        port: body.port || 25565,
+        memoryMb: body.memoryMb,
+        cpuCores: body.cpuCores,
+        environment: body.environment as Record<string, string>,
+        startNow: body.startOnCompletion,
+      });
+    } catch (dockerErr: any) {
+      fastify.log.warn(`[Docker] Notice on container start: ${dockerErr.message}`);
+    }
 
     return reply.status(201).send(serializeService(service));
   });
@@ -221,13 +233,21 @@ export async function servicesRoutes(fastify: FastifyInstance) {
       });
     } catch {}
 
-    // If Docker is available, send command to container
+    // Send action to real Docker container
     const containerName = `nexus-${id}`;
-    const container = await dockerService.findContainerByName(containerName);
+    let container = await dockerService.findContainerByName(containerName);
+
     if (container) {
       if (action === 'START') await dockerService.startContainer(container.Id);
       if (action === 'STOP') await dockerService.stopContainer(container.Id);
       if (action === 'RESTART') await dockerService.restartContainer(container.Id);
+    } else if (action === 'START') {
+      // Re-create container if missing
+      await dockerService.createServiceContainer({
+        serviceId: id,
+        name: id,
+        startNow: true,
+      });
     }
 
     return reply.send({ success: true, action, status: nextStatus });
@@ -247,16 +267,32 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     } catch {}
 
     const srvName = service?.name || 'Servidor';
+    const containerName = `nexus-${id}`;
 
     wsClient.send(`\x1b[1;36m[PanelMaster Terminal]\x1b[0m Conectado a la consola de \x1b[1;37m${srvName}\x1b[0m\r\n`);
     wsClient.send(`\x1b[1;32m✓ Canal de comunicación seguro establecido con el host.\x1b[0m\r\n\r\n`);
 
     // Check if real Docker container exists on the host
-    const containerName = `nexus-${id}`;
-    const dockerContainer = await dockerService.findContainerByName(containerName);
+    let dockerContainer = await dockerService.findContainerByName(containerName);
+
+    // If container doesn't exist yet, auto-create it on Docker
+    if (!dockerContainer && dockerService.isAvailable()) {
+      wsClient.send(`\x1b[33m[PanelMaster]\x1b[0m Inicializando contenedor Docker en el host (itzg/minecraft-server:latest)...\r\n`);
+      const created = await dockerService.createServiceContainer({
+        serviceId: id,
+        name: srvName,
+        image: 'itzg/minecraft-server:latest',
+        port: 25565,
+        memoryMb: 2048,
+        startNow: true,
+      });
+      if (created && created.Id) {
+        dockerContainer = { Id: created.Id };
+      }
+    }
 
     if (dockerContainer) {
-      // Stream real Docker container logs
+      wsClient.send(`\x1b[32m[PanelMaster]\x1b[0m Transmitiendo salida de consola en vivo de Docker...\r\n\r\n`);
       const logStream = dockerService.streamLogs(
         dockerContainer.Id,
         (chunk) => {
@@ -270,48 +306,30 @@ export async function servicesRoutes(fastify: FastifyInstance) {
       wsClient.on('close', () => {
         logStream.abort();
       });
-    } else {
-      // Stream live runtime logs so user gets full server visibility
-      wsClient.send(`\x1b[33m[PanelMaster]\x1b[0m Cargando entorno de ejecución para ${srvName}...\r\n`);
-      wsClient.send(`[Server thread/INFO] [PanelMaster]: Verificando archivos de configuración y puertos...\r\n`);
-      setTimeout(() => {
-        if (wsClient.readyState === WebSocket.OPEN) {
-          wsClient.send(`[Server thread/INFO] [PanelMaster]: Proceso iniciado en puerto asignado (TCP 25565).\r\n`);
-          wsClient.send(`[Server thread/INFO] [Minecraft]: Starting minecraft server version 1.20.4 (Paper)\r\n`);
-          wsClient.send(`[Server thread/INFO] [Minecraft]: Loading server properties & generating world data\r\n`);
-          wsClient.send(`[Server thread/INFO] [Minecraft]: \x1b[32mDone (2.84s)! Servidor listo para recibir conexiones. Escribe 'help' para ver comandos.\x1b[0m\r\n`);
+
+      // Handle terminal commands and forward to container
+      wsClient.on('message', async (data: any) => {
+        const raw = data.toString().trim();
+        if (!raw) return;
+
+        // Internal action events
+        if (raw.startsWith('__ACTION__:')) {
+          const act = raw.replace('__ACTION__:', '');
+          if (act === 'START') await dockerService.startContainer(dockerContainer.Id);
+          if (act === 'STOP') await dockerService.stopContainer(dockerContainer.Id);
+          if (act === 'RESTART') await dockerService.restartContainer(dockerContainer.Id);
+          return;
         }
-      }, 500);
+
+        // Execute real command in Minecraft via rcon-cli
+        const res = await dockerService.execCommand(dockerContainer.Id, raw);
+        if (res && wsClient.readyState === WebSocket.OPEN) {
+          wsClient.send(`${res}\r\n`);
+        }
+      });
+    } else {
+      // Fallback message if docker socket is not mounted
+      wsClient.send(`\x1b[33m[PanelMaster]\x1b[0m Esperando arranque del servicio en el host...\r\n`);
     }
-
-    // Handle client command inputs
-    wsClient.on('message', (data: any) => {
-      const cmd = data.toString().trim();
-      if (!cmd) return;
-
-      if (cmd === 'help') {
-        wsClient.send(`\r\n\x1b[33m--- Comandos Disponibles ---\x1b[0m\r\n`);
-        wsClient.send(`help               - Muestra esta lista de comandos\r\n`);
-        wsClient.send(`list               - Muestra los jugadores o conexiones activas\r\n`);
-        wsClient.send(`say <mensaje>      - Envía un mensaje global en el chat\r\n`);
-        wsClient.send(`op <jugador>       - Otorga permisos de operador al usuario\r\n`);
-        wsClient.send(`status             - Muestra estadísticas de CPU, RAM y latencia\r\n`);
-        wsClient.send(`reload             - Recarga las configuraciones del servidor\r\n\r\n`);
-      } else if (cmd.startsWith('say ')) {
-        const msg = cmd.substring(4);
-        wsClient.send(`[Server thread/INFO] [Server]: [Servidor] ${msg}\r\n`);
-      } else if (cmd === 'list') {
-        wsClient.send(`[Server thread/INFO] Hay 0 de un máximo de 20 jugadores en línea: []\r\n`);
-      } else if (cmd.startsWith('op ')) {
-        const target = cmd.substring(3);
-        wsClient.send(`[Server thread/INFO] Otorgado permiso de operador a ${target}\r\n`);
-      } else if (cmd === 'status') {
-        wsClient.send(`[PanelMaster]: CPU: 2.1% | RAM: 1.8 GB / 4.0 GB | TPS: 20.0 (Excelente)\r\n`);
-      } else if (cmd === 'reload') {
-        wsClient.send(`[Server thread/INFO] Recargando configuración y complementos...\r\n[Server thread/INFO] ¡Recarga completada con éxito!\r\n`);
-      } else {
-        wsClient.send(`[Server thread/INFO] Comando ejecutado: '${cmd}'\r\n`);
-      }
-    });
   });
 }

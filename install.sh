@@ -144,6 +144,7 @@ fi
 echo -e "${CYAN}[3/6] Desplegando archivos de PanelMaster en ${INSTALL_DIR}...${NC}"
 
 mkdir -p "${INSTALL_DIR}"
+mkdir -p /var/lib/panelmaster/volumes
 
 if [ -d "${INSTALL_DIR}/.git" ]; then
   echo -e "${YELLOW}[*] Sincronizando con la última versión de GitHub...${NC}"

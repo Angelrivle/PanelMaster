@@ -58,7 +58,7 @@ services:
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-onboarding@resend.dev}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/panelmaster/volumes:/var/lib/nexuspanel/volumes
+      - /var/lib/panelmaster/volumes:/var/lib/panelmaster/volumes
     ports:
       - "3000:3000"
 
