@@ -480,7 +480,7 @@ export const CreateServiceModal: React.FC<CreateServiceModalProps> = ({
             : 'DATABASE',
         status: startOnCompletion ? 'RUNNING' : 'STOPPED',
         node: selectedNode,
-        ip: '51.38.125.71',
+        ip: window.location.hostname || 'panel.zenforge.online',
         port: primaryPort,
         memoryMb: memoryMb,
         maxRamMb: memoryMb,
@@ -516,7 +516,7 @@ export const CreateServiceModal: React.FC<CreateServiceModalProps> = ({
             variables: {
               user: ownerEmail.split('@')[0],
               server: name.trim(),
-              ip: '51.38.125.71',
+              ip: window.location.hostname || 'panel.zenforge.online',
               port: String(primaryPort),
               serverUrl: `http://localhost:5173/server/${serverId}/console`,
             },

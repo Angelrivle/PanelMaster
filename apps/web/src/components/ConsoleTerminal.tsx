@@ -50,10 +50,17 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
     term.open(terminalRef.current);
     fitAddon.fit();
 
+    // Enable native CTRL+C to copy selected text to clipboard
+    term.attachCustomKeyEventHandler((arg: KeyboardEvent) => {
+      if (arg.ctrlKey && (arg.key === 'c' || arg.code === 'KeyC') && term.hasSelection()) {
+        navigator.clipboard.writeText(term.getSelection());
+        return false;
+      }
+      return true;
+    });
+
     xtermInstance.current = term;
     fitAddonRef.current = fitAddon;
-
-    term.writeln('\x1b[1;36m[NexusPanel Terminal]\x1b[0m Conectando a la consola segura del servicio...');
 
     // Connect WebSocket
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -63,7 +70,6 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
 
     ws.onopen = () => {
       setIsConnected(true);
-      term.writeln('\x1b[1;32m✓ Conectado exitosamente al contenedor.\x1b[0m\r\n');
     };
 
     ws.onmessage = (event) => {

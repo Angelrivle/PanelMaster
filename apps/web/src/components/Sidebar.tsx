@@ -30,6 +30,7 @@ import {
   ChevronLeft,
   Mail,
   Palette,
+  LayoutGrid,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -87,6 +88,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // -------------------------------------------------------------
   if (currentView.startsWith('admin')) {
     const adminTabs = [
+      { id: 'admin-overview', label: 'Overview', icon: LayoutGrid },
       { id: 'admin-activity', label: isEs ? 'Actividad' : 'Activity', icon: Activity },
       { id: 'admin-settings', label: 'Settings', icon: Settings },
       { id: 'admin-auth', label: isEs ? 'OAuth & Autenticación' : 'OAuth & Auth Envs', icon: Shield },
@@ -98,7 +100,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       { id: 'admin-theme-editor', label: 'Theme Editor', icon: Palette },
     ];
 
-    const currentAdminTab = currentView === 'admin' ? 'admin-activity' : currentView;
+    const currentAdminTab = currentView === 'admin' ? 'admin-overview' : currentView;
 
     return (
       <aside

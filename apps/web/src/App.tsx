@@ -211,7 +211,7 @@ export function App() {
           <AdminPanel
             servers={servers}
             onBackToDashboard={() => setCurrentView('dashboard')}
-            activeTab={currentView === 'admin' ? 'activity' : currentView.replace('admin-', '')}
+            activeTab={currentView === 'admin' ? 'overview' : currentView.replace('admin-', '')}
             onTabChange={(tab) => setCurrentView(`admin-${tab}`)}
             onUpdateServers={(updated) => setServers(updated)}
             onOpenCreateServer={() => setIsCreateModalOpen(true)}

@@ -38,6 +38,7 @@ import { DraggableToggle } from '../components/DraggableToggle';
 import { AdminMailTemplates } from './admin/AdminMailTemplates';
 import { AdminThemeEditor } from './admin/AdminThemeEditor';
 import { AdminAuthProviders } from './admin/AdminAuthProviders';
+import { AdminOverview } from './admin/AdminOverview';
 import { CreateServiceModal } from '../components/CreateServiceModal';
 
 interface AdminPanelProps {
@@ -87,14 +88,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 }) => {
   const isEs = language === 'es';
 
-  // Section Routing: 'activity' | 'settings' | 'users' | 'servers' | 'nodes' | 'eggs' | 'mail-templates' | 'theme-editor' | 'auth'
+  // Section Routing: 'overview' | 'activity' | 'settings' | 'users' | 'servers' | 'nodes' | 'eggs' | 'mail-templates' | 'theme-editor' | 'auth'
   const [internalTab, setInternalTab] = useState<
-    'activity' | 'settings' | 'users' | 'servers' | 'nodes' | 'eggs' | 'mail-templates' | 'theme-editor' | 'auth'
-  >('activity');
+    'overview' | 'activity' | 'settings' | 'users' | 'servers' | 'nodes' | 'eggs' | 'mail-templates' | 'theme-editor' | 'auth'
+  >('overview');
   const activeSection = controlledTab ? (controlledTab.replace('admin-', '') as any) : internalTab;
 
   const handleSwitchSection = (
-    sec: 'activity' | 'settings' | 'users' | 'servers' | 'nodes' | 'eggs' | 'mail-templates' | 'theme-editor' | 'auth'
+    sec: 'overview' | 'activity' | 'settings' | 'users' | 'servers' | 'nodes' | 'eggs' | 'mail-templates' | 'theme-editor' | 'auth'
   ) => {
     setEditingServer(null);
     setEditingNode(null);
@@ -2104,6 +2105,9 @@ docker:
   // =========================================================================
   return (
     <div className="w-full space-y-5 pb-10">
+      {/* SECTION 0: OVERVIEW (SLATE 1.1.1 SYSTEM OVERVIEW) */}
+      {activeSection === 'overview' && <AdminOverview />}
+
       {/* SECTION 1: ACTIVIDAD */}
       {activeSection === 'activity' && (
         <div className="space-y-5">

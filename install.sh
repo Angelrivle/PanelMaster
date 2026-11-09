@@ -228,6 +228,9 @@ if command -v ufw &> /dev/null; then
   ufw allow 3000/tcp >/dev/null 2>&1 || true
   ufw allow 5173/tcp >/dev/null 2>&1 || true
   ufw allow 25565/tcp >/dev/null 2>&1 || true
+  ufw allow 25565/udp >/dev/null 2>&1 || true
+  ufw allow 25565:25600/tcp >/dev/null 2>&1 || true
+  ufw allow 25565:25600/udp >/dev/null 2>&1 || true
   ufw --force enable >/dev/null 2>&1 || true
 elif command -v firewall-cmd &> /dev/null; then
   firewall-cmd --permanent --add-port=80/tcp >/dev/null 2>&1 || true
@@ -236,6 +239,9 @@ elif command -v firewall-cmd &> /dev/null; then
   firewall-cmd --permanent --add-port=3000/tcp >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port=5173/tcp >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port=25565/tcp >/dev/null 2>&1 || true
+  firewall-cmd --permanent --add-port=25565/udp >/dev/null 2>&1 || true
+  firewall-cmd --permanent --add-port=25565-25600/tcp >/dev/null 2>&1 || true
+  firewall-cmd --permanent --add-port=25565-25600/udp >/dev/null 2>&1 || true
   firewall-cmd --reload >/dev/null 2>&1 || true
 fi
 

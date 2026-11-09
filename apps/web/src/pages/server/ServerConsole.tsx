@@ -11,6 +11,13 @@ interface ServerConsoleProps {
 export const ServerConsole: React.FC<ServerConsoleProps> = ({ server, onAction }) => {
   const maxRam = server.maxRamMb || server.memoryMb || 2048;
   const isRunning = server.status === 'RUNNING';
+  const serverIp =
+    server.ip && server.ip !== '127.0.0.1' && server.ip !== '51.38.125.71'
+      ? server.ip
+      : typeof window !== 'undefined'
+      ? window.location.hostname
+      : 'panel.zenforge.online';
+  const serverPort = server.port || 25565;
 
   return (
     <div className="w-full space-y-5">
@@ -47,7 +54,7 @@ export const ServerConsole: React.FC<ServerConsoleProps> = ({ server, onAction }
             <p className="text-xs text-zinc-400 mt-1 font-mono">
               IP / Puerto:{' '}
               <span className="text-blue-400 font-semibold select-all">
-                play.panelmaster.local:{server.port || 25565}
+                {serverIp}:{serverPort}
               </span>{' '}
               • Software: {server.template || 'Minecraft Paper'} • Memoria asignada: {maxRam} MB
             </p>
@@ -55,8 +62,9 @@ export const ServerConsole: React.FC<ServerConsoleProps> = ({ server, onAction }
         </div>
       </div>
 
-      {/* Real-time Dynamic Telemetry Metrics */}
+      {/* Real-time Dynamic Telemetry Metrics (CPU, RAM, Disk, Network) */}
       <MetricsChart
+        serviceId={server.id}
         cpuUsage={server.cpuUsage ?? 2.1}
         memoryUsageMb={server.ramMb ?? Math.round(maxRam * 0.38)}
         maxMemoryMb={maxRam}
