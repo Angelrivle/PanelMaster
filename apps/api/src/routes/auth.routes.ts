@@ -59,7 +59,7 @@ export async function authRoutes(fastify: FastifyInstance) {
 
     const token = fastify.jwt.sign(
       { userId: user.id, email: user.email, isSuperAdmin: user.isSuperAdmin },
-      { expiresIn: '15m' }
+      { expiresIn: '30d' }
     );
 
     const refreshToken = fastify.jwt.sign(
@@ -140,7 +140,7 @@ export async function authRoutes(fastify: FastifyInstance) {
 
     const token = fastify.jwt.sign(
       { userId: user.id, email: user.email, isSuperAdmin: user.isSuperAdmin },
-      { expiresIn: '15m' }
+      { expiresIn: '30d' }
     );
 
     const refreshToken = fastify.jwt.sign(
