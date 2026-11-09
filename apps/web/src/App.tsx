@@ -122,8 +122,8 @@ export function App() {
     }
   };
 
-  const handleServerAction = (serverId: string, action: 'START' | 'STOP' | 'RESTART') => {
-    const nextStatus = action === 'STOP' ? 'STOPPED' : 'RUNNING';
+  const handleServerAction = (serverId: string, action: 'START' | 'STOP' | 'RESTART' | 'KILL') => {
+    const nextStatus = action === 'STOP' || action === 'KILL' ? 'STOPPED' : 'RUNNING';
     const updated = servers.map((s) => (s.id === serverId ? { ...s, status: nextStatus } : s));
     setServers(updated);
     localStorage.setItem('pm_servers_cache', JSON.stringify(updated));

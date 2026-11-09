@@ -5,7 +5,7 @@ import { Gamepad2, Bot, Database, Globe } from 'lucide-react';
 
 interface ServerConsoleProps {
   server: any;
-  onAction: (action: 'START' | 'STOP' | 'RESTART') => void;
+  onAction: (action: 'START' | 'STOP' | 'RESTART' | 'KILL') => void;
 }
 
 export const ServerConsole: React.FC<ServerConsoleProps> = ({ server, onAction }) => {

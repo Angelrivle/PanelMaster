@@ -629,12 +629,12 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     return reply.status(201).send(serializeService(service));
   });
 
-  // Service Actions (Start, Stop, Restart)
+  // Service Actions (Start, Stop, Restart, Kill)
   fastify.post('/:id/actions', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { action } = z.object({ action: z.enum(['START', 'STOP', 'RESTART']) }).parse(request.body);
+    const { action } = z.object({ action: z.enum(['START', 'STOP', 'RESTART', 'KILL']) }).parse(request.body);
 
-    const nextStatus = action === 'STOP' ? 'STOPPED' : 'RUNNING';
+    const nextStatus = action === 'STOP' || action === 'KILL' ? 'STOPPED' : 'RUNNING';
 
     try {
       await prisma.service.updateMany({
@@ -654,6 +654,7 @@ export async function servicesRoutes(fastify: FastifyInstance) {
       if (action === 'START') await dockerService.startContainer(container.Id);
       if (action === 'STOP') await dockerService.stopContainer(container.Id);
       if (action === 'RESTART') await dockerService.restartContainer(container.Id);
+      if (action === 'KILL') await dockerService.killContainer(container.Id);
     } else if (action === 'START') {
       await dockerService.createServiceContainer({
         serviceId: id,
@@ -663,6 +664,38 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     }
 
     return reply.send({ success: true, action, status: nextStatus });
+  });
+
+  // Get Server Startup Configuration
+  fastify.get('/:id/startup', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const config = dockerService.getServerConfig(id);
+    return reply.send({
+      jarName: config.jarName || 'server.jar',
+      javaVersion: config.java || 21,
+      customArgs: config.customArgs || '-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200',
+      onlineMode: config.onlineMode || 'false',
+      maxPlayers: config.maxPlayers || '20',
+      version: config.version || '1.20.4',
+      fork: config.fork || 'Paper',
+    });
+  });
+
+  // Update Server Startup Configuration
+  fastify.post('/:id/startup', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as any;
+    const current = dockerService.getServerConfig(id);
+    const updated = {
+      ...current,
+      jarName: body.jarName || current.jarName || 'server.jar',
+      java: body.javaVersion ? Number(body.javaVersion) : current.java || 21,
+      customArgs: body.customArgs !== undefined ? body.customArgs : current.customArgs,
+      onlineMode: body.onlineMode || current.onlineMode || 'false',
+      maxPlayers: body.maxPlayers || current.maxPlayers || '20',
+    };
+    dockerService.saveServerConfig(id, updated);
+    return reply.send({ success: true, message: 'Startup configuration updated', config: updated });
   });
 
   // WebSocket Live Console Gateway Tunnel
@@ -753,6 +786,7 @@ export async function servicesRoutes(fastify: FastifyInstance) {
           if (act === 'START') await dockerService.startContainer(container.Id);
           if (act === 'STOP') await dockerService.stopContainer(container.Id);
           if (act === 'RESTART') await dockerService.restartContainer(container.Id);
+          if (act === 'KILL') await dockerService.killContainer(container.Id);
         } else if (act === 'START') {
           await dockerService.createServiceContainer({
             serviceId: id,

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Sliders, Save, Cpu, Info, Check, RefreshCw } from 'lucide-react';
 import { toast } from '../../components/Toast';
 
@@ -13,15 +13,69 @@ export const ServerStartup: React.FC<ServerStartupProps> = ({ server }) => {
   const [dockerImage, setDockerImage] = useState(isMinecraft ? 'ghcr.io/panelmaster/images:java-21' : 'node:20-alpine');
   const [buildType, setBuildType] = useState('recommended');
   const [mcVersion, setMcVersion] = useState('1.20.4');
-  const [forkVersion, setForkVersion] = useState('paper-1.20.4-493');
-  const [customArgs, setCustomArgs] = useState('-Xms2G -Xmx4G -XX:+UseG1GC');
+  const [forkVersion, setForkVersion] = useState('paper-1.20.4');
+  const [customArgs, setCustomArgs] = useState('-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200');
+  const [onlineMode, setOnlineMode] = useState('false');
   const [isSaved, setIsSaved] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 2000);
-    toast.success('Parámetros de arranque guardados. Se aplicarán al iniciar o reiniciar el contenedor.');
+  useEffect(() => {
+    if (!server?.id) return;
+    const token = localStorage.getItem('nexus_token');
+    fetch(`/api/v1/services/${server.id}/startup`, {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data) {
+          if (data.jarName) setJarName(data.jarName);
+          if (data.customArgs) setCustomArgs(data.customArgs);
+          if (data.onlineMode) setOnlineMode(data.onlineMode);
+          if (data.version) setMcVersion(data.version);
+          if (data.javaVersion) {
+            setDockerImage(`ghcr.io/panelmaster/images:java-${data.javaVersion}`);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [server?.id]);
+
+  const handleSave = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!server?.id) return;
+    setIsLoading(true);
+
+    try {
+      const javaMatch = dockerImage.match(/java-(\d+)/);
+      const javaVersion = javaMatch ? parseInt(javaMatch[1], 10) : 21;
+      const token = localStorage.getItem('nexus_token');
+
+      const res = await fetch(`/api/v1/services/${server.id}/startup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          jarName,
+          javaVersion,
+          customArgs,
+          onlineMode,
+        }),
+      });
+
+      if (!res.ok) throw new Error('Error al guardar configuración');
+
+      setIsSaved(true);
+      setTimeout(() => setIsSaved(false), 2500);
+      toast.success('Parámetros de arranque guardados en el host. Se aplicarán al iniciar o reiniciar el servidor.');
+    } catch {
+      toast.error('Error al guardar parámetros de arranque.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
-import { Play, Square, RotateCw, Terminal as TermIcon, Wifi, WifiOff } from 'lucide-react';
+import { Play, Square, RotateCw, Terminal as TermIcon, Wifi, WifiOff, ZapOff } from 'lucide-react';
 
 interface ConsoleTerminalProps {
   serviceId: string;
   serviceStatus: string;
-  onAction: (action: 'START' | 'STOP' | 'RESTART') => void;
+  onAction: (action: 'START' | 'STOP' | 'RESTART' | 'KILL') => void;
 }
 
 export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
@@ -20,6 +20,8 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
   const socketRef = useRef<WebSocket | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [commandInput, setCommandInput] = useState<string>('');
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -124,7 +126,7 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
     };
   }, [serviceId]);
 
-  const handlePowerAction = (act: 'START' | 'STOP' | 'RESTART') => {
+  const handlePowerAction = (act: 'START' | 'STOP' | 'RESTART' | 'KILL') => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(`__ACTION__:${act}`);
     }
@@ -141,7 +143,29 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
     }
 
     socketRef.current.send(clean);
+    setCommandHistory((prev) => [clean, ...prev.filter((c) => c !== clean)]);
+    setHistoryIndex(-1);
     setCommandInput('');
+  };
+
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (commandHistory.length === 0) return;
+      const nextIdx = Math.min(historyIndex + 1, commandHistory.length - 1);
+      setHistoryIndex(nextIdx);
+      setCommandInput(commandHistory[nextIdx]);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (historyIndex > 0) {
+        const nextIdx = historyIndex - 1;
+        setHistoryIndex(nextIdx);
+        setCommandInput(commandHistory[nextIdx]);
+      } else if (historyIndex === 0) {
+        setHistoryIndex(-1);
+        setCommandInput('');
+      }
+    }
   };
 
   return (
@@ -166,7 +190,7 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
           </span>
         </div>
 
-        {/* Quick Power Controls */}
+        {/* Quick Power Controls (Start, Restart, Stop, Kill like Pterodactyl) */}
         <div className="flex items-center gap-2">
           <button
             onClick={() => handlePowerAction('START')}
@@ -191,20 +215,29 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
             <Square className="w-3.5 h-3.5 fill-current" />
             Detener
           </button>
+          <button
+            onClick={() => handlePowerAction('KILL')}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-800/40 rounded-lg text-xs font-medium transition"
+            title="Forzar detención inmediata (SIGKILL)"
+          >
+            <ZapOff className="w-3.5 h-3.5" />
+            Kill
+          </button>
         </div>
       </div>
 
       {/* Terminal Viewport */}
       <div ref={terminalRef} className="flex-1 p-2 overflow-hidden" />
 
-      {/* Interactive Command Input Box */}
+      {/* Interactive Command Input Box with History */}
       <form onSubmit={sendCommand} className="flex items-center border-t border-slate-800 bg-[#0d1322] px-3 py-2">
         <span className="text-sky-400 font-mono text-sm mr-2 font-bold">&gt;</span>
         <input
           type="text"
           value={commandInput}
           onChange={(e) => setCommandInput(e.target.value)}
-          placeholder="Enviar comando a la consola de la aplicación (ej. 'say ¡Hola servidor!', 'op username', 'reload')..."
+          onKeyDown={handleInputKeyDown}
+          placeholder="Enviar comando a la consola (Flechas ↑/↓ para historial, ej. 'op user', 'help')..."
           className="flex-1 bg-transparent text-sm text-slate-100 placeholder-slate-500 focus:outline-none font-mono"
         />
         <button

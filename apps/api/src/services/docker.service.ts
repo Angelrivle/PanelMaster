@@ -493,6 +493,16 @@ export class DockerService {
     }
   }
 
+  async killContainer(containerId: string): Promise<boolean> {
+    if (!this.isAvailable()) return false;
+    try {
+      await this.request(`/containers/${containerId}/kill`, 'POST');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async execCommand(containerId: string, cmd: string): Promise<string> {
     const cleanCmd = cmd.trim();
     if (!this.isAvailable() || !cleanCmd) return '';
