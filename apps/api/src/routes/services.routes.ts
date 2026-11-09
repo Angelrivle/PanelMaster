@@ -3,8 +3,12 @@ import { z } from 'zod';
 import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
+import { exec } from 'child_process';
+import util from 'util';
 import { prisma } from '../prisma';
 import { dockerService } from '../services/docker.service';
+
+const execAsync = util.promisify(exec);
 
 function serializeService(s: any) {
   return {
@@ -423,6 +427,128 @@ export async function servicesRoutes(fastify: FastifyInstance) {
       fs.renameSync(src, dest);
       return reply.send({ success: true, message: 'Renombrado correctamente' });
     } catch (err: any) {
+      return reply.status(500).send({ error: err.message });
+    }
+  });
+
+  // Batch Delete Files and Folders
+  fastify.post('/:id/files/delete-batch', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { paths = [] } = request.body as { paths: string[] };
+    const baseDir = path.resolve(`/var/lib/panelmaster/volumes/${id}`);
+
+    let deletedCount = 0;
+    for (const p of paths) {
+      try {
+        const clean = (p || '').replace(/^\/+/, '');
+        if (!clean) continue;
+        const targetPath = path.resolve(baseDir, clean);
+        if (targetPath.startsWith(baseDir) && targetPath !== baseDir && fs.existsSync(targetPath)) {
+          fs.rmSync(targetPath, { recursive: true, force: true });
+          deletedCount++;
+        }
+      } catch (err: any) {
+        fastify.log.error(`[Delete Batch Error on ${p}]: ${err.message}`);
+      }
+    }
+
+    return reply.send({
+      success: true,
+      count: deletedCount,
+      message: `${deletedCount} elementos eliminados definitivamente`,
+    });
+  });
+
+  // Compress Selected Files & Folders (.zip / .tar.gz)
+  fastify.post('/:id/files/compress', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { paths = [], destination = '', archiveName } = request.body as {
+      paths: string[];
+      destination?: string;
+      archiveName?: string;
+    };
+    const baseDir = path.resolve(`/var/lib/panelmaster/volumes/${id}`);
+
+    if (paths.length === 0) {
+      return reply.status(400).send({ error: 'No se seleccionaron archivos para comprimir' });
+    }
+
+    try {
+      const destDir = path.resolve(baseDir, (destination || '').replace(/^\/+/, ''));
+      if (!destDir.startsWith(baseDir)) {
+        return reply.status(403).send({ error: 'Acceso denegado' });
+      }
+      fs.mkdirSync(destDir, { recursive: true });
+
+      const name = archiveName
+        ? (archiveName.endsWith('.zip') || archiveName.endsWith('.tar.gz') ? archiveName : `${archiveName}.zip`)
+        : `archive_${Date.now()}.zip`;
+
+      const targetArchive = path.resolve(destDir, name);
+
+      const relItems = paths
+        .map((p) => (p || '').replace(/^\/+/, ''))
+        .filter(Boolean)
+        .map((p) => `"${p}"`)
+        .join(' ');
+
+      if (!relItems) {
+        return reply.status(400).send({ error: 'Rutas no válidas' });
+      }
+
+      if (name.endsWith('.tar.gz')) {
+        await execAsync(`tar -czf "${targetArchive}" ${relItems}`, { cwd: baseDir });
+      } else {
+        try {
+          await execAsync(`zip -r "${targetArchive}" ${relItems}`, { cwd: baseDir });
+        } catch {
+          const fallbackArchive = targetArchive.replace(/\.zip$/, '.tar.gz');
+          await execAsync(`tar -czf "${fallbackArchive}" ${relItems}`, { cwd: baseDir });
+        }
+      }
+
+      return reply.send({ success: true, message: 'Archivo comprimido creado exitosamente', archiveName: name });
+    } catch (err: any) {
+      fastify.log.error(`[Compress Error]: ${err.message}`);
+      return reply.status(500).send({ error: `Error al comprimir: ${err.message}` });
+    }
+  });
+
+  // Decompress / Extract Archive (.zip / .tar.gz)
+  fastify.post('/:id/files/decompress', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { path: reqPath, destination = '' } = request.body as { path: string; destination?: string };
+    const baseDir = path.resolve(`/var/lib/panelmaster/volumes/${id}`);
+
+    try {
+      const targetArchive = path.resolve(baseDir, (reqPath || '').replace(/^\/+/, ''));
+      const destDir = path.resolve(baseDir, (destination || '').replace(/^\/+/, ''));
+
+      if (!targetArchive.startsWith(baseDir) || !destDir.startsWith(baseDir)) {
+        return reply.status(403).send({ error: 'Acceso denegado' });
+      }
+
+      if (!fs.existsSync(targetArchive)) {
+        return reply.status(404).send({ error: 'El archivo comprimido no existe' });
+      }
+
+      fs.mkdirSync(destDir, { recursive: true });
+
+      if (targetArchive.endsWith('.zip')) {
+        try {
+          await execAsync(`unzip -o "${targetArchive}" -d "${destDir}"`);
+        } catch (err: any) {
+          return reply.status(500).send({ error: `Error al descomprimir: ${err.message}` });
+        }
+      } else if (targetArchive.endsWith('.tar.gz') || targetArchive.endsWith('.tgz')) {
+        await execAsync(`tar -xzf "${targetArchive}" -C "${destDir}"`);
+      } else {
+        return reply.status(400).send({ error: 'Formato no soportado (utiliza .zip o .tar.gz)' });
+      }
+
+      return reply.send({ success: true, message: 'Archivo descomprimido correctamente' });
+    } catch (err: any) {
+      fastify.log.error(`[Decompress Error]: ${err.message}`);
       return reply.status(500).send({ error: err.message });
     }
   });

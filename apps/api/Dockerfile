@@ -4,7 +4,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Install build dependencies
-RUN apk add --no-cache openssl python3 make g++
+RUN apk add --no-cache openssl zip unzip tar gzip python3 make g++
 
 COPY package*.json ./
 COPY tsconfig.json ./
@@ -22,7 +22,7 @@ FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl zip unzip tar gzip
 
 ENV NODE_ENV=production
 ENV PORT=3000

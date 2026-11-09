@@ -91,6 +91,9 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
+  // Multi-selection state for batch delete & compression
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+
   // Expanded folders (config, plugins open by default)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(
     new Set(['/config', '/plugins'])
@@ -116,6 +119,31 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
     },
   ]);
   const [activeTabPath, setActiveTabPath] = useState<string>('/server.properties');
+
+  const formatSize = (bytes?: number) => {
+    if (!bytes || bytes === 0) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  };
+
+  const toggleSelect = (path: string, checked: boolean) => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedPaths.size === fileSystem.length && fileSystem.length > 0) {
+      setSelectedPaths(new Set());
+    } else {
+      setSelectedPaths(new Set(fileSystem.map((f) => f.path)));
+    }
+  };
 
   // Real-time Filesystem Synchronization with VPS host
   const fetchFiles = useCallback(async () => {
@@ -486,6 +514,101 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
     fetchFiles();
   };
 
+  // Batch Delete Selected Files & Folders
+  const handleBatchDelete = () => {
+    if (selectedPaths.size === 0) return;
+    const pathsArray = Array.from(selectedPaths);
+    setConfirmModal({
+      open: true,
+      title: 'Eliminar Elementos Seleccionados',
+      message: `¿Estás seguro de eliminar permanentemente los ${pathsArray.length} archivos y carpetas seleccionados? Esta acción no se puede deshacer.`,
+      onConfirm: async () => {
+        if (!server?.id) return;
+        try {
+          const token = localStorage.getItem('nexus_token');
+          const res = await fetch(`/api/v1/services/${server.id}/files/delete-batch`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ paths: pathsArray }),
+          });
+          if (!res.ok) throw new Error('Error al eliminar archivos');
+          toast.success(`¡${pathsArray.length} elementos eliminados definitivamente!`);
+          setOpenTabs((prev) => prev.filter((t) => !selectedPaths.has(t.path)));
+          setSelectedPaths(new Set());
+          await fetchFiles();
+        } catch (err: any) {
+          toast.error(err.message || 'Error al eliminar');
+        }
+      },
+    });
+  };
+
+  // Compress Selected Files & Folders (.zip)
+  const handleBatchCompress = () => {
+    if (selectedPaths.size === 0) return;
+    const pathsArray = Array.from(selectedPaths);
+    setModalInputValue(`backup_${new Date().toISOString().slice(0, 10)}.zip`);
+    setInputModal({
+      open: true,
+      title: 'Comprimir Archivos Seleccionados',
+      description: `Introduce el nombre del archivo comprimido (.zip o .tar.gz) para los ${pathsArray.length} elementos:`,
+      placeholder: 'archivo.zip',
+      onConfirm: async (archiveName) => {
+        if (!archiveName.trim() || !server?.id) return;
+        try {
+          toast.info('Comprimiendo archivos seleccionados...');
+          const token = localStorage.getItem('nexus_token');
+          const res = await fetch(`/api/v1/services/${server.id}/files/compress`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({
+              paths: pathsArray,
+              archiveName: archiveName.trim(),
+            }),
+          });
+          if (!res.ok) throw new Error('Error al comprimir archivos');
+          toast.success(`¡Archivo ${archiveName.trim()} creado exitosamente!`);
+          setSelectedPaths(new Set());
+          await fetchFiles();
+        } catch (err: any) {
+          toast.error(err.message || 'Error al comprimir');
+        }
+      },
+    });
+  };
+
+  // Extract Archive (.zip / .tar.gz)
+  const handleExtractArchive = async (item: FileNode) => {
+    if (!server?.id) return;
+    setContextMenu(null);
+    try {
+      toast.info(`Descomprimiendo ${item.name}...`);
+      const token = localStorage.getItem('nexus_token');
+      const res = await fetch(`/api/v1/services/${server.id}/files/decompress`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          path: item.path,
+          destination: item.parentDir || '',
+        }),
+      });
+      if (!res.ok) throw new Error('Error al descomprimir');
+      toast.success(`¡${item.name} descomprimido correctamente!`);
+      await fetchFiles();
+    } catch (err: any) {
+      toast.error(err.message || 'Error al descomprimir');
+    }
+  };
+
   const onDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -545,6 +668,15 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
             }`}
           >
             <div className="flex items-center gap-2 truncate">
+              {/* Checkbox for item selection */}
+              <input
+                type="checkbox"
+                checked={selectedPaths.has(item.path)}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => toggleSelect(item.path, e.target.checked)}
+                className="w-3.5 h-3.5 rounded bg-zinc-800 border-zinc-700 text-blue-500 focus:ring-0 cursor-pointer shrink-0"
+              />
+
               {item.isDir ? (
                 <span
                   onClick={(e) => {
@@ -582,6 +714,12 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
 
               <span className="font-mono text-xs truncate tracking-tight">{item.name}</span>
             </div>
+
+            {!item.isDir && item.size !== undefined && item.size > 0 && (
+              <span className="text-[10px] text-zinc-500 font-mono shrink-0 ml-1">
+                {formatSize(item.size)}
+              </span>
+            )}
           </div>
 
           {/* Children nodes */}
@@ -730,6 +868,56 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
               />
             </div>
           </div>
+
+          {/* Multi-Selection Control Bar (Pterodactyl Style) */}
+          <div className="px-3 py-1.5 bg-[#070709] border-b border-[#18181b] flex items-center justify-between text-xs select-none shrink-0">
+            <label className="flex items-center gap-2 cursor-pointer text-zinc-400 hover:text-zinc-200">
+              <input
+                type="checkbox"
+                checked={fileSystem.length > 0 && selectedPaths.size === fileSystem.length}
+                onChange={toggleSelectAll}
+                className="w-3.5 h-3.5 rounded bg-zinc-800 border-zinc-700 text-blue-500 focus:ring-0 cursor-pointer"
+              />
+              <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">
+                {selectedPaths.size > 0 ? `${selectedPaths.size} seleccionados` : 'Seleccionar Todo'}
+              </span>
+            </label>
+            <span className="font-mono text-[10px] text-zinc-500">{fileSystem.length} ítems</span>
+          </div>
+
+          {/* Active Batch Actions Toolbar */}
+          {selectedPaths.size > 0 && (
+            <div className="bg-blue-600/15 border-b border-blue-500/30 px-3 py-2 flex items-center justify-between gap-1 animate-in fade-in duration-100 shrink-0">
+              <span className="text-[11px] font-mono font-bold text-blue-400 truncate">
+                {selectedPaths.size} selecc.
+              </span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={handleBatchCompress}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-[10px] font-bold transition shadow-sm"
+                  title="Comprimir seleccionados (.zip)"
+                >
+                  <Archive className="w-3 h-3" />
+                  <span>Zip</span>
+                </button>
+                <button
+                  onClick={handleBatchDelete}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded text-[10px] font-bold transition shadow-sm"
+                  title="Borrar seleccionados"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Borrar</span>
+                </button>
+                <button
+                  onClick={() => setSelectedPaths(new Set())}
+                  className="p-1 text-zinc-400 hover:text-white rounded"
+                  title="Cancelar selección"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Tree list */}
           <div className="flex-1 overflow-y-auto no-scrollbar py-2 space-y-0.5">
@@ -1150,6 +1338,33 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
           >
             <Download className="w-3.5 h-3.5 text-slate-400" />
             <span>Download</span>
+          </button>
+
+          {/* Extract / Descomprimir if archive */}
+          {(contextMenu.item.name.endsWith('.zip') ||
+            contextMenu.item.name.endsWith('.tar.gz') ||
+            contextMenu.item.name.endsWith('.tgz')) && (
+            <button
+              onClick={() => handleExtractArchive(contextMenu.item)}
+              className="w-full flex items-center gap-2.5 px-3 py-1.5 text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300 text-left transition font-semibold"
+            >
+              <Archive className="w-3.5 h-3.5" />
+              <span>Descomprimir / Extraer</span>
+            </button>
+          )}
+
+          {/* Compress item into archive */}
+          <button
+            onClick={() => {
+              const item = contextMenu.item;
+              setSelectedPaths(new Set([item.path]));
+              setContextMenu(null);
+              setTimeout(handleBatchCompress, 100);
+            }}
+            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-slate-200 hover:bg-[#1a2133] hover:text-white text-left transition"
+          >
+            <Archive className="w-3.5 h-3.5 text-slate-400" />
+            <span>Comprimir (.zip)</span>
           </button>
 
           {/* Rename */}
