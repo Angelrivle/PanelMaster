@@ -1,5 +1,6 @@
 import http from 'http';
 import fs from 'fs';
+import path from 'path';
 import os from 'os';
 
 export interface CreateServiceContainerOptions {
@@ -127,6 +128,166 @@ export class DockerService {
     });
   }
 
+  getServerConfig(serviceId: string): any {
+    const hostDataPath = `/var/lib/panelmaster/volumes/${serviceId}`;
+    const cfgPath = path.join(hostDataPath, 'panelmaster.json');
+    try {
+      if (fs.existsSync(cfgPath)) {
+        return JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      }
+    } catch {}
+    return {
+      type: 'PAPER',
+      version: '1.20.4',
+      fork: 'Paper',
+      build: 'Build #498',
+      java: 17,
+      modPlatform: null,
+      modpack: null,
+      modpackTitle: null,
+      modpackVersion: null,
+    };
+  }
+
+  saveServerConfig(serviceId: string, config: any) {
+    const hostDataPath = `/var/lib/panelmaster/volumes/${serviceId}`;
+    try {
+      if (!fs.existsSync(hostDataPath)) {
+        fs.mkdirSync(hostDataPath, { recursive: true });
+      }
+      const cfgPath = path.join(hostDataPath, 'panelmaster.json');
+      fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2), 'utf8');
+    } catch {}
+  }
+
+  async updateServerVersion(
+    serviceId: string,
+    options: { fork: string; version: string; build?: string; java?: number; cleanInstall?: boolean }
+  ) {
+    const hostDataPath = `/var/lib/panelmaster/volumes/${serviceId}`;
+    const prevConfig = this.getServerConfig(serviceId);
+
+    // Normalize fork name to itzg TYPE
+    const rawFork = (options.fork || 'paper').trim().toLowerCase();
+    let type = 'PAPER';
+    if (rawFork.includes('purpur')) type = 'PURPUR';
+    else if (rawFork.includes('paper')) type = 'PAPER';
+    else if (rawFork.includes('spigot')) type = 'SPIGOT';
+    else if (rawFork.includes('bukkit') || rawFork.includes('craftbukkit')) type = 'BUKKIT';
+    else if (rawFork.includes('fabric')) type = 'FABRIC';
+    else if (rawFork.includes('forge') && !rawFork.includes('neo')) type = 'FORGE';
+    else if (rawFork.includes('neoforge')) type = 'NEOFORGE';
+    else if (rawFork.includes('vanilla')) type = 'VANILLA';
+    else if (rawFork.includes('velocity')) type = 'VELOCITY';
+    else if (rawFork.includes('bungee')) type = 'BUNGEECORD';
+    else if (rawFork.includes('waterfall')) type = 'WATERFALL';
+    else if (rawFork.includes('mohist')) type = 'MOHIST';
+    else if (rawFork.includes('magma')) type = 'MAGMA';
+    else if (rawFork.includes('catserver')) type = 'CATSERVER';
+    else type = rawFork.toUpperCase();
+
+    // If clean install requested, purge previous conflicting jars & cache
+    if (options.cleanInstall) {
+      try {
+        if (fs.existsSync(hostDataPath)) {
+          const items = fs.readdirSync(hostDataPath);
+          for (const item of items) {
+            if (
+              item.endsWith('.jar') ||
+              item === 'cache' ||
+              item === 'libraries' ||
+              item === '.fabric' ||
+              item === 'paper.yml' ||
+              item === 'spigot.yml'
+            ) {
+              fs.rmSync(path.join(hostDataPath, item), { recursive: true, force: true });
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const updatedConfig = {
+      ...prevConfig,
+      type,
+      version: options.version || '1.20.4',
+      fork: options.fork || 'Paper',
+      build: options.build || 'Latest',
+      java: options.java || 17,
+      modPlatform: null,
+      modpack: null,
+      modpackTitle: null,
+      modpackVersion: null,
+    };
+
+    this.saveServerConfig(serviceId, updatedConfig);
+
+    // Recreate container with new version parameters
+    return this.createServiceContainer({
+      serviceId,
+      name: serviceId,
+      startNow: true,
+    });
+  }
+
+  async installModpack(
+    serviceId: string,
+    options: {
+      modpackSlug: string;
+      modpackTitle: string;
+      versionNumber: string;
+      loader: string;
+      mcVersion: string;
+      wipeWorld?: boolean;
+      cleanModsFolder?: boolean;
+    }
+  ) {
+    const hostDataPath = `/var/lib/panelmaster/volumes/${serviceId}`;
+    const prevConfig = this.getServerConfig(serviceId);
+
+    // Clean old mods / config if requested
+    if (options.cleanModsFolder) {
+      try {
+        const modsPath = path.join(hostDataPath, 'mods');
+        if (fs.existsSync(modsPath)) fs.rmSync(modsPath, { recursive: true, force: true });
+        const configPath = path.join(hostDataPath, 'config');
+        if (fs.existsSync(configPath)) fs.rmSync(configPath, { recursive: true, force: true });
+      } catch {}
+    }
+
+    // Wipe world if requested
+    if (options.wipeWorld) {
+      try {
+        for (const dir of ['world', 'world_nether', 'world_the_end']) {
+          const worldPath = path.join(hostDataPath, dir);
+          if (fs.existsSync(worldPath)) fs.rmSync(worldPath, { recursive: true, force: true });
+        }
+      } catch {}
+    }
+
+    const loaderUpper = (options.loader || 'fabric').trim().toUpperCase();
+    const updatedConfig = {
+      ...prevConfig,
+      type: loaderUpper,
+      version: options.mcVersion || '1.20.1',
+      modPlatform: 'MODRINTH',
+      modpack: options.modpackSlug,
+      modpackTitle: options.modpackTitle,
+      modpackVersion: options.versionNumber,
+      loader: options.loader || 'Fabric',
+      mcVersion: options.mcVersion || '1.20.1',
+    };
+
+    this.saveServerConfig(serviceId, updatedConfig);
+
+    // Recreate container with Modrinth parameters
+    return this.createServiceContainer({
+      serviceId,
+      name: serviceId,
+      startNow: true,
+    });
+  }
+
   async createServiceContainer(options: CreateServiceContainerOptions): Promise<any> {
     if (!this.isAvailable()) {
       return { id: `mock-${options.serviceId}`, name: `nexus-${options.serviceId}` };
@@ -156,13 +317,18 @@ export class DockerService {
       }
     } catch {}
 
+    // Read saved configuration for this server (version, fork, modpack)
+    const savedConfig = this.getServerConfig(options.serviceId);
+    const serverType = options.environment?.TYPE || savedConfig.type || 'PAPER';
+    const serverVersion = options.environment?.VERSION || savedConfig.version || '1.20.4';
+
     // Balanced JVM memory (65-70% heap, remaining for Metaspace/Native Netty to completely prevent OOM)
     const jvmHeapMb = Math.max(1024, Math.floor(memoryMb * 0.70));
 
     const envMap: Record<string, string> = {
       EULA: 'TRUE',
-      TYPE: 'PAPER',
-      VERSION: '1.20.4',
+      TYPE: serverType,
+      VERSION: serverVersion,
       ONLINE_MODE: 'FALSE',
       MAX_PLAYERS: '20',
       ENABLE_RCON: 'true',
@@ -173,6 +339,8 @@ export class DockerService {
       USE_AIKARS_FLAGS: 'true',
       STOP_SERVER_ON_CONTAINER_EXIT: 'false',
       JVM_XX_OPTS: '-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC',
+      ...(savedConfig.modPlatform ? { MOD_PLATFORM: savedConfig.modPlatform } : {}),
+      ...(savedConfig.modpack ? { MODRINTH_MODPACK: savedConfig.modpack } : {}),
       ...(options.environment || {}),
     };
 

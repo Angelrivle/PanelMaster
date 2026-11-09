@@ -349,37 +349,86 @@ export const ServerVersions: React.FC<ServerVersionsProps> = ({ server, onUpdate
     return true;
   });
 
-  const handleExecuteInstall = () => {
-    if (!installConfirm.software || !installConfirm.build) return;
+  // Load real active configuration from server backend
+  useEffect(() => {
+    if (!server?.id) return;
+    const token = localStorage.getItem('nexus_token');
+    fetch(`/api/v1/services/${server.id}/config`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((cfg) => {
+        if (cfg && cfg.version) {
+          const forkName = cfg.fork || cfg.type || 'Paper';
+          setActiveBuild({
+            name: forkName,
+            id: (cfg.type || 'paper').toLowerCase(),
+            version: cfg.version || '1.20.4',
+            fullVersion: `${forkName} ${cfg.version || '1.20.4'}`,
+            java: cfg.java || (cfg.version?.startsWith('1.21') ? 21 : 17),
+            build: cfg.build || 'Latest',
+            channel: 'Stable',
+          });
+        }
+      })
+      .catch(() => {});
+  }, [server?.id]);
+
+  const handleExecuteInstall = async () => {
+    if (!installConfirm.software || !installConfirm.build || !server?.id) return;
     setIsInstalling(true);
 
-    setTimeout(() => {
-      setActiveBuild({
-        name: installConfirm.software!.name,
-        id: installConfirm.software!.id,
-        version: installConfirm.build!.version,
-        fullVersion: `${installConfirm.software!.name} ${installConfirm.build!.version} (${installConfirm.build!.build})`,
-        java: installConfirm.build!.java,
-        build: installConfirm.build!.build,
-        channel: installConfirm.build!.type === 'RELEASE' ? 'Stable' : 'Experimental',
+    try {
+      const token = localStorage.getItem('nexus_token');
+      const res = await fetch(`/api/v1/services/${server.id}/version`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          fork: installConfirm.software.id || installConfirm.software.name,
+          version: installConfirm.build.version,
+          build: installConfirm.build.build,
+          java: installConfirm.build.java,
+          cleanInstall: installConfirm.cleanInstall,
+        }),
       });
 
-      setIsInstalling(false);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Error al actualizar versión del servidor');
+      }
+
+      setActiveBuild({
+        name: installConfirm.software.name,
+        id: installConfirm.software.id,
+        version: installConfirm.build.version,
+        fullVersion: `${installConfirm.software.name} ${installConfirm.build.version} (${installConfirm.build.build})`,
+        java: installConfirm.build.java,
+        build: installConfirm.build.build,
+        channel: installConfirm.build.type === 'RELEASE' ? 'Stable' : 'Experimental',
+      });
+
       setInstallConfirm({ open: false, software: null, build: null, cleanInstall: false });
       setSelectedSoftware(null);
 
       if (onUpdateVersion) {
         onUpdateVersion({
-          fork: installConfirm.software!.name,
-          version: installConfirm.build!.version,
-          build: installConfirm.build!.build,
+          fork: installConfirm.software.name,
+          version: installConfirm.build.version,
+          build: installConfirm.build.build,
         });
       }
 
       toast.success(
-        `¡Versión instalada exitosamente!\nSoftware: ${installConfirm.software!.name} ${installConfirm.build!.version}\nJava configurado: Java ${installConfirm.build!.java}`
+        `¡Versión instalada exitosamente!\nSoftware: ${installConfirm.software.name} ${installConfirm.build.version}\nJava: Java ${installConfirm.build.java}\nEl servidor se ha reiniciado con la nueva versión.`
       );
-    }, 1200);
+    } catch (err: any) {
+      toast.error(err.message || 'Error al instalar la versión en el servidor.');
+    } finally {
+      setIsInstalling(false);
+    }
   };
 
   return (

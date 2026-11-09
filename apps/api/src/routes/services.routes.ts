@@ -38,6 +38,116 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // Search Modpacks via Modrinth Official API
+  fastify.get('/modpacks/search', async (request, reply) => {
+    const { query = '', loader, version, limit = '24', offset = '0' } = request.query as any;
+    try {
+      const facets: string[][] = [['project_type:modpack']];
+      if (loader && loader !== 'all') {
+        facets.push([`categories:${loader.toLowerCase()}`]);
+      }
+      if (version && version !== 'all') {
+        facets.push([`versions:${version}`]);
+      }
+      const facetsEncoded = encodeURIComponent(JSON.stringify(facets));
+      const queryEncoded = encodeURIComponent(String(query).trim());
+      const url = `https://api.modrinth.com/v2/search?query=${queryEncoded}&facets=${facetsEncoded}&limit=${limit}&offset=${offset}&index=downloads`;
+
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'PanelMaster/1.0 (https://zenforge.online)',
+        },
+      });
+      if (!res.ok) {
+        throw new Error(`Modrinth API responded with status ${res.status}`);
+      }
+      const data = await res.json();
+      return reply.send(data);
+    } catch (err: any) {
+      fastify.log.error(`[Modrinth Search] Error: ${err.message}`);
+      return reply.status(500).send({ error: 'Failed to search Modrinth', hits: [] });
+    }
+  });
+
+  // Fetch Versions for a specific Modpack from Modrinth
+  fastify.get('/modpacks/:slug/versions', async (request, reply) => {
+    const { slug } = request.params as { slug: string };
+    try {
+      const url = `https://api.modrinth.com/v2/project/${encodeURIComponent(slug)}/version`;
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'PanelMaster/1.0 (https://zenforge.online)',
+        },
+      });
+      if (!res.ok) {
+        throw new Error(`Modrinth API responded with status ${res.status}`);
+      }
+      const data = await res.json();
+      return reply.send(data);
+    } catch (err: any) {
+      fastify.log.error(`[Modrinth Versions] Error: ${err.message}`);
+      return reply.status(500).send({ error: 'Failed to fetch modpack versions', versions: [] });
+    }
+  });
+
+  // Get Server Configuration (Current Fork, Version, Modpack)
+  fastify.get('/:id/config', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const cfg = dockerService.getServerConfig(id);
+    return reply.send(cfg);
+  });
+
+  // Change Server Fork & Version (Paper, Purpur, Spigot, Fabric, Forge, etc.)
+  fastify.post('/:id/version', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as {
+      fork: string;
+      version: string;
+      build?: string;
+      java?: number;
+      cleanInstall?: boolean;
+    };
+
+    try {
+      const res = await dockerService.updateServerVersion(id, body);
+      // Update DB status if running
+      await prisma.service.updateMany({
+        where: { id },
+        data: { status: 'RUNNING' },
+      });
+      return reply.send({ success: true, message: 'Server version updated successfully', result: res });
+    } catch (err: any) {
+      fastify.log.error(`[Version Update Error]: ${err.message}`);
+      return reply.status(500).send({ error: err.message });
+    }
+  });
+
+  // Install Modrinth Modpack on Server
+  fastify.post('/:id/modpack', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as {
+      modpackSlug: string;
+      modpackTitle: string;
+      versionNumber: string;
+      loader: string;
+      mcVersion: string;
+      wipeWorld?: boolean;
+      cleanModsFolder?: boolean;
+    };
+
+    try {
+      const res = await dockerService.installModpack(id, body);
+      await prisma.service.updateMany({
+        where: { id },
+        data: { status: 'RUNNING' },
+      });
+      return reply.send({ success: true, message: 'Modpack installed and server restarted', result: res });
+    } catch (err: any) {
+      fastify.log.error(`[Modpack Install Error]: ${err.message}`);
+      return reply.status(500).send({ error: err.message });
+    }
+  });
+
   // Real Container Telemetry Metrics
   fastify.get('/:id/stats', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
