@@ -10,6 +10,7 @@ import { servicesRoutes } from './routes/services.routes';
 import { nodesRoutes } from './routes/nodes.routes';
 import { templatesRoutes } from './routes/templates.routes';
 import { mailRoutes } from './routes/mail.routes';
+import { sftpService } from './services/sftp.service';
 import bcrypt from 'bcryptjs';
 import { prisma } from './prisma';
 
@@ -101,6 +102,9 @@ async function bootstrap() {
   try {
     await app.listen({ port: config.port, host: config.host });
     console.log(`🚀 NexusPanel Core API running at http://${config.host}:${config.port}`);
+
+    // Start native SFTP daemon on port 2022
+    sftpService.start();
   } catch (err) {
     app.log.error(err);
     process.exit(1);

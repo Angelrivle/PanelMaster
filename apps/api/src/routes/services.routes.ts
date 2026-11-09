@@ -634,9 +634,11 @@ export async function servicesRoutes(fastify: FastifyInstance) {
       id: z.string().optional(),
       name: z.string().min(2).max(64),
       egg: z.string().optional(),
+      category: z.string().optional(),
       templateId: z.string().optional(),
       templateVersionId: z.string().optional(),
       dockerImage: z.string().optional(),
+      startupCommand: z.string().optional(),
       memoryMb: z.number().min(256).default(2048),
       cpuCores: z.number().min(0.2).default(2.0),
       diskMb: z.number().min(512).default(10240),
@@ -660,8 +662,8 @@ export async function servicesRoutes(fastify: FastifyInstance) {
           data: {
             name: body.egg || 'Minecraft Java (Paper)',
             slug: slug + '-tmpl',
-            category: 'minecraft',
-            type: 'GAME_SERVER',
+            category: body.category || 'minecraft',
+            type: body.category === 'web' ? 'WEB_DYNAMIC' : (body.category === 'bots' ? 'DISCORD_BOT' : 'GAME_SERVER'),
           },
         });
       }
@@ -679,8 +681,8 @@ export async function servicesRoutes(fastify: FastifyInstance) {
           data: {
             templateId: template.id,
             version: 'latest',
-            dockerImage: body.dockerImage || 'itzg/minecraft-server:latest',
-            startupCommand: '',
+            dockerImage: body.dockerImage || (body.category === 'databases' ? 'redis:7-alpine' : 'itzg/minecraft-server:latest'),
+            startupCommand: body.startupCommand || '',
             minCpuCores: body.cpuCores,
             minMemoryMb: body.memoryMb,
             minDiskMb: body.diskMb,
@@ -752,13 +754,37 @@ export async function servicesRoutes(fastify: FastifyInstance) {
       },
     });
 
+    const isNonMinecraft = body.category && body.category !== 'minecraft';
+    const effectiveImage = body.dockerImage || version.dockerImage || (body.category === 'databases' ? 'redis:7-alpine' : 'itzg/minecraft-server:latest');
+
+    // Save initial server configuration in panelmaster.json
+    dockerService.saveServerConfig(service.id, {
+      serviceId: service.id,
+      name: body.name,
+      egg: body.egg || template.name,
+      category: body.category || template.category || 'minecraft',
+      image: effectiveImage,
+      port: body.port || (body.category === 'databases' ? 6379 : 25565),
+      startupCommand: body.startupCommand || version.startupCommand,
+      memoryMb: body.memoryMb,
+      environment: body.environment || {},
+      ...(isNonMinecraft ? {} : {
+        type: 'PAPER',
+        version: '1.20.4',
+        fork: 'Paper',
+        java: 17,
+        modPlatform: null,
+        modpack: null,
+      }),
+    });
+
     // Spawn REAL Docker container on host
     try {
       await dockerService.createServiceContainer({
         serviceId: service.id,
         name: service.name,
-        image: version.dockerImage || 'itzg/minecraft-server:latest',
-        port: body.port || 25565,
+        image: effectiveImage,
+        port: body.port || (body.category === 'databases' ? 6379 : 25565),
         memoryMb: body.memoryMb,
         cpuCores: body.cpuCores,
         environment: body.environment as Record<string, string>,

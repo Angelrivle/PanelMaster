@@ -59,6 +59,7 @@ services:
       - /var/lib/panelmaster/volumes:/var/lib/panelmaster/volumes
     ports:
       - "3000:3000"
+      - "2022:2022"
 
   web:
     build:

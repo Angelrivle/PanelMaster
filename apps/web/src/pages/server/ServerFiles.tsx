@@ -107,18 +107,9 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
     '/eula.txt': `eula=true\n`,
   };
 
-  // Open tabs
-  const [openTabs, setOpenTabs] = useState<OpenTab[]>([
-    {
-      path: '/server.properties',
-      name: 'server.properties',
-      content: sampleContents['/server.properties'],
-      originalContent: sampleContents['/server.properties'],
-      language: 'ini',
-      isDirty: false,
-    },
-  ]);
-  const [activeTabPath, setActiveTabPath] = useState<string>('/server.properties');
+  // Open tabs (empty initially; files open upon user click in the explorer)
+  const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
+  const [activeTabPath, setActiveTabPath] = useState<string>('');
 
   const formatSize = (bytes?: number) => {
     if (!bytes || bytes === 0) return '';

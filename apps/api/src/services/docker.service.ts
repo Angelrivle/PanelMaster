@@ -368,11 +368,107 @@ export class DockerService {
     }
 
     const containerName = `nexus-${options.serviceId}`;
-    const port = options.port || 25565;
-    const memoryMb = options.memoryMb || 2048;
-
-    // Read saved configuration for this server (version, fork, modpack)
     const savedConfig = this.getServerConfig(options.serviceId);
+    const hostDataPath = `/var/lib/panelmaster/volumes/${options.serviceId}`;
+
+    // Ensure volume directory exists
+    try {
+      if (!fs.existsSync(hostDataPath)) {
+        fs.mkdirSync(hostDataPath, { recursive: true });
+      }
+    } catch {}
+
+    // Remove old container if exists
+    try {
+      const existing = await this.findContainerByName(containerName);
+      if (existing) {
+        await this.request(`/containers/${existing.Id}?force=true`, 'DELETE');
+      }
+    } catch {}
+
+    // Determine if workload is Minecraft or Generic (Redis, Postgres, Nginx, Node, Python, etc.)
+    const category = savedConfig.category || '';
+    const imageToCheck = (options.image || savedConfig.image || '').toLowerCase();
+    const isMinecraft =
+      category === 'minecraft' ||
+      imageToCheck.includes('minecraft') ||
+      (!category &&
+        !imageToCheck.includes('redis') &&
+        !imageToCheck.includes('valkey') &&
+        !imageToCheck.includes('postgres') &&
+        !imageToCheck.includes('mysql') &&
+        !imageToCheck.includes('mariadb') &&
+        !imageToCheck.includes('mongo') &&
+        !imageToCheck.includes('nginx') &&
+        !imageToCheck.includes('node') &&
+        !imageToCheck.includes('python'));
+
+    // ==========================================
+    // 1. GENERIC / NON-MINECRAFT CONTAINER (Redis, etc.)
+    // ==========================================
+    if (!isMinecraft) {
+      const genericImage = options.image || savedConfig.image || 'redis:7-alpine';
+      const genericPort = options.port || savedConfig.port || (category === 'databases' ? 6379 : 80);
+      const genericMemoryMb = options.memoryMb || savedConfig.memoryMb || 512;
+      const portKey = `${genericPort}/tcp`;
+
+      await this.ensureImage(genericImage);
+
+      const envMap: Record<string, string> = {
+        ...(savedConfig.environment || {}),
+        ...(options.environment || {}),
+      };
+
+      const startupCmd = savedConfig.startupCommand || options.environment?.STARTUP || '';
+
+      const createPayload: any = {
+        Image: genericImage,
+        Env: Object.entries(envMap).map(([k, v]) => `${k}=${v}`),
+        ExposedPorts: {
+          [portKey]: {},
+        },
+        HostConfig: {
+          PortBindings: {
+            [portKey]: [{ HostIp: '0.0.0.0', HostPort: String(genericPort) }],
+          },
+          Binds: [`${hostDataPath}:/data`],
+          RestartPolicy: { Name: 'no' },
+          MemoryReservation: genericMemoryMb * 1024 * 1024,
+          Memory: (genericMemoryMb + 512) * 1024 * 1024,
+          MemorySwap: -1,
+        },
+        Tty: true,
+        OpenStdin: true,
+      };
+
+      if (startupCmd && !genericImage.includes('redis')) {
+        createPayload.Cmd = ['sh', '-c', startupCmd];
+      }
+
+      try {
+        const created = await this.request(
+          `/containers/create?name=${encodeURIComponent(containerName)}`,
+          'POST',
+          createPayload
+        );
+
+        if (created && created.Id) {
+          if (options.startNow !== false) {
+            await this.startContainer(created.Id);
+          }
+          return created;
+        }
+      } catch (err: any) {
+        console.error(`[DockerService] Error creating generic container: ${err.message}`);
+      }
+      return null;
+    }
+
+    // ==========================================
+    // 2. MINECRAFT CONTAINER
+    // ==========================================
+    const port = options.port || savedConfig.port || 25565;
+    const memoryMb = options.memoryMb || savedConfig.memoryMb || 2048;
     const serverType = options.environment?.TYPE || savedConfig.type || 'PAPER';
     const serverVersion = options.environment?.VERSION || savedConfig.version || '1.20.4';
 
@@ -409,33 +505,15 @@ export class DockerService {
       }
     }
 
-    // Remove old container if exists
-    try {
-      const existing = await this.findContainerByName(containerName);
-      if (existing) {
-        await this.request(`/containers/${existing.Id}?force=true`, 'DELETE');
-      }
-    } catch {}
-
     // Pull image in background if needed
     await this.ensureImage(image);
 
-    // Prepare volume directory
-    const hostDataPath = `/var/lib/panelmaster/volumes/${options.serviceId}`;
-    try {
-      if (!fs.existsSync(hostDataPath)) {
-        fs.mkdirSync(hostDataPath, { recursive: true });
-      }
-    } catch {}
-
     // Balanced JVM memory (65-70% heap, remaining for Metaspace/Native Netty to completely prevent OOM)
     const jvmHeapMb = Math.max(1024, Math.floor(memoryMb * 0.70));
-
     const isModpack = !!(savedConfig.modPlatform && savedConfig.modpack);
 
     const envMap: Record<string, string> = {
       EULA: 'TRUE',
-      ...(isModpack ? { TYPE: 'MODRINTH' } : { TYPE: serverType }),
       VERSION: serverVersion,
       ONLINE_MODE: 'FALSE',
       MAX_PLAYERS: '20',
@@ -451,12 +529,11 @@ export class DockerService {
       JVM_XX_OPTS: '-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC',
       ...(isModpack
         ? {
+            MODPACK_PLATFORM: 'MODRINTH',
             MODRINTH_MODPACK: savedConfig.modpack,
+            MODRINTH_ALLOWED_VERSION_TYPE: 'alpha,beta,release',
             MODRINTH_DEFAULT_VERSION_TYPE: 'alpha',
-            MODRINTH_MODPACK_VERSION_TYPE: 'alpha',
-            MODRINTH_VERSION_TYPE: 'alpha',
-            MODRINTH_ALLOWED_VERSION_TYPE: 'alpha',
-            MODPACK_DEFAULT_VERSION_TYPE: 'alpha',
+            VERSION_TYPE: 'alpha,beta,release',
             ...(savedConfig.modpackVersion && savedConfig.modpackVersion !== 'latest'
               ? { MODRINTH_VERSION: savedConfig.modpackVersion }
               : {}),
@@ -464,7 +541,9 @@ export class DockerService {
               ? { MODRINTH_LOADER: savedConfig.loader.toLowerCase() }
               : {}),
           }
-        : {}),
+        : {
+            TYPE: serverType,
+          }),
       ...(options.environment || {}),
     };
 

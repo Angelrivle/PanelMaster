@@ -81,6 +81,9 @@ export const Login: React.FC<LoginProps> = ({
 
       localStorage.setItem('nexus_token', data.token);
       localStorage.setItem('nexus_refresh', data.refreshToken);
+      if (data.user) {
+        localStorage.setItem('nexus_user', JSON.stringify(data.user));
+      }
       if (data.organizations?.[0]?.id) {
         localStorage.setItem('nexus_org_id', data.organizations[0].id);
       } else if (data.organization?.id) {

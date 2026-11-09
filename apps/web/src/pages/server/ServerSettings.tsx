@@ -131,124 +131,95 @@ export const ServerSettings: React.FC<ServerSettingsProps> = ({
         </form>
       </div>
 
-      {/* SFTP / FTP Connection Details - Full Width */}
-      <div className="w-full bg-[#111114] border border-[#1f1f23] rounded-2xl p-5 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
-              <Key className="w-4 h-4 text-emerald-400" />
-              Conexión SFTP / FTP (Acceso a Archivos Externo)
-            </h3>
-            <p className="text-xs text-zinc-400 mt-1">
-              Conecta clientes como FileZilla, WinSCP o Cyberduck para transferir mods, backups o mundos completos a máxima velocidad.
-            </p>
-          </div>
+      {/* SFTP / FTP Connection Details - Full Width Matching Screenshot */}
+      {(() => {
+        const host = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'panel.zenforge.online';
+        let loggedUser = 'angelriveradeveloperooa';
+        if (typeof window !== 'undefined') {
+          const userStr = localStorage.getItem('nexus_user');
+          if (userStr) {
+            try {
+              const u = JSON.parse(userStr);
+              loggedUser = (u.username || u.email?.split('@')[0] || 'admin').toLowerCase();
+            } catch {}
+          }
+        }
+        const shortId = server?.id ? (server.id.length > 8 ? server.id.slice(0, 8) : server.id) : '7083669c';
+        const username = `${loggedUser}.${shortId}`;
+        const serverAddress = `sftp://${host}:2022`;
 
-          {/* Quick Launch Button */}
-          {(() => {
-            const host = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'panel.zenforge.online';
-            const username = `admin.${server?.id?.slice(0, 8) || server?.id || 'server'}`;
-            const sftpUri = `sftp://${username}@${host}:2022`;
-            return (
-              <a
-                href={sftpUri}
-                className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/30 transition shrink-0"
-              >
-                <Key className="w-3.5 h-3.5" />
-                Abrir en Cliente SFTP
-              </a>
-            );
-          })()}
-        </div>
+        return (
+          <div className="w-full bg-[#181a20] border border-[#2b303c] rounded-xl overflow-hidden shadow-lg space-y-0">
+            {/* Orange Header like Bloom / Pterodactyl */}
+            <div className="bg-[#ea580c] text-white px-5 py-3.5 flex items-center justify-between font-bold tracking-wider text-sm uppercase">
+              <div className="flex items-center gap-2">
+                <Key className="w-4 h-4 text-white" />
+                <span>SFTP DETAILS</span>
+              </div>
+              <span className="text-xs bg-black/25 px-2.5 py-0.5 rounded font-mono font-medium tracking-normal">PUERTO: 2022</span>
+            </div>
 
-        {(() => {
-          const host = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'panel.zenforge.online';
-          const username = `admin.${server?.id?.slice(0, 8) || server?.id || 'server'}`;
-          const sftpUri = `sftp://${username}@${host}:2022`;
-
-          return (
-            <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                <div className="bg-[#09090b] p-3.5 rounded-xl border border-[#1f1f23] flex justify-between items-center">
-                  <div>
-                    <span className="text-[10px] text-zinc-500 uppercase font-mono block">Dirección / Servidor</span>
-                    <span className="font-mono text-xs text-zinc-200 font-bold">{host}</span>
-                  </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-[11px] font-mono font-bold tracking-wider text-zinc-300 uppercase block mb-1.5">
+                  SERVER ADDRESS
+                </label>
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    readOnly
+                    value={serverAddress}
+                    className="w-full bg-[#272b34] text-zinc-100 font-mono text-sm px-4 py-3 rounded-lg border border-[#3b414f] focus:outline-none select-all font-medium pr-28"
+                  />
                   <button
-                    onClick={() => copy(host, 'host')}
-                    className="p-1.5 text-zinc-500 hover:text-white hover:bg-[#18181c] rounded-lg transition"
-                    title="Copiar Host"
+                    type="button"
+                    onClick={() => copy(serverAddress, 'sftp-host')}
+                    className="absolute right-2 px-3 py-1.5 bg-[#1b1e24] hover:bg-[#323846] text-zinc-200 text-xs font-semibold rounded-md border border-[#444b5c] transition flex items-center gap-1.5 cursor-pointer"
                   >
-                    {copiedKey === 'host' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                    {copiedKey === 'sftp-host' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedKey === 'sftp-host' ? 'Copiado' : 'Copiar'}
                   </button>
-                </div>
-
-                <div className="bg-[#09090b] p-3.5 rounded-xl border border-[#1f1f23] flex justify-between items-center">
-                  <div>
-                    <span className="text-[10px] text-zinc-500 uppercase font-mono block">Puerto SFTP (Recomendado)</span>
-                    <span className="font-mono text-xs text-emerald-400 font-bold">2022 <span className="text-zinc-500 font-normal">(FTP: 21)</span></span>
-                  </div>
-                  <button
-                    onClick={() => copy('2022', 'port')}
-                    className="p-1.5 text-zinc-500 hover:text-white hover:bg-[#18181c] rounded-lg transition"
-                    title="Copiar Puerto"
-                  >
-                    {copiedKey === 'port' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                  </button>
-                </div>
-
-                <div className="bg-[#09090b] p-3.5 rounded-xl border border-[#1f1f23] flex justify-between items-center">
-                  <div>
-                    <span className="text-[10px] text-zinc-500 uppercase font-mono block">Nombre de Usuario</span>
-                    <span className="font-mono text-xs text-blue-400 font-bold">{username}</span>
-                  </div>
-                  <button
-                    onClick={() => copy(username, 'user')}
-                    className="p-1.5 text-zinc-500 hover:text-white hover:bg-[#18181c] rounded-lg transition"
-                    title="Copiar Usuario"
-                  >
-                    {copiedKey === 'user' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                  </button>
-                </div>
-
-                <div className="bg-[#09090b] p-3.5 rounded-xl border border-[#1f1f23] flex justify-between items-center">
-                  <div>
-                    <span className="text-[10px] text-zinc-500 uppercase font-mono block">Contraseña</span>
-                    <span className="font-mono text-xs text-zinc-400">Contraseña del Panel</span>
-                  </div>
-                  <span className="text-[10px] text-zinc-500 font-mono px-2 py-0.5 rounded bg-zinc-800">Tu cuenta</span>
                 </div>
               </div>
 
-              {/* Full connection URI */}
-              <div className="p-3 bg-[#09090b] rounded-xl border border-[#1f1f23] flex items-center justify-between gap-3">
-                <div className="truncate">
-                  <span className="text-[10px] text-zinc-500 font-mono uppercase block">Cadena de Conexión Rápida</span>
-                  <span className="font-mono text-xs text-zinc-300 truncate block select-all">{sftpUri}</span>
+              <div>
+                <label className="text-[11px] font-mono font-bold tracking-wider text-zinc-300 uppercase block mb-1.5">
+                  USERNAME
+                </label>
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    readOnly
+                    value={username}
+                    className="w-full bg-[#272b34] text-zinc-100 font-mono text-sm px-4 py-3 rounded-lg border border-[#3b414f] focus:outline-none select-all font-medium pr-28"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => copy(username, 'sftp-user')}
+                    className="absolute right-2 px-3 py-1.5 bg-[#1b1e24] hover:bg-[#323846] text-zinc-200 text-xs font-semibold rounded-md border border-[#444b5c] transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {copiedKey === 'sftp-user' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedKey === 'sftp-user' ? 'Copiado' : 'Copiar'}
+                  </button>
                 </div>
-                <button
-                  onClick={() => copy(sftpUri, 'uri')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-[#18181c] hover:bg-[#222226] text-zinc-200 text-xs rounded-lg transition shrink-0 font-medium"
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 text-xs text-zinc-400 border-t border-[#272b34]">
+                <p>
+                  Contraseña: <span className="text-zinc-200 font-medium">Usa la contraseña de tu cuenta de PanelMaster</span>
+                </p>
+                <a
+                  href={serverAddress}
+                  className="inline-flex items-center gap-1.5 text-orange-400 hover:text-orange-300 font-semibold"
                 >
-                  {copiedKey === 'uri' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copiedKey === 'uri' ? '¡Copiado!' : 'Copiar URL'}
-                </button>
+                  <Key className="w-3.5 h-3.5" />
+                  Conectar con FileZilla / WinSCP
+                </a>
               </div>
-
-              {/* Helper Steps */}
-              <div className="text-[11px] text-zinc-400 bg-blue-500/5 border border-blue-500/10 rounded-xl p-3 space-y-1">
-                <p className="font-semibold text-blue-300">💡 Instrucciones para conectar FileZilla / WinSCP:</p>
-                <ol className="list-decimal list-inside space-y-0.5 text-zinc-400">
-                  <li>En FileZilla ve a <strong>Archivo &gt; Gestor de Sitios</strong> y crea una nueva conexión.</li>
-                  <li>Selecciona el protocolo <strong>SFTP - SSH File Transfer Protocol</strong>.</li>
-                  <li>Ingresa el Servidor (<code className="text-zinc-200">{host}</code>), Puerto (<code className="text-zinc-200">2022</code>) y Usuario (<code className="text-zinc-200">{username}</code>).</li>
-                  <li>Ingresa la misma contraseña con la que inicias sesión en este panel.</li>
-                </ol>
-              </div>
-            </>
-          );
-        })()}
-      </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Debug & Node Information - Full Width */}
       <div className="w-full bg-[#111114] border border-[#1f1f23] rounded-2xl p-5 shadow-sm space-y-4">
