@@ -7,6 +7,7 @@ import { exec } from 'child_process';
 import util from 'util';
 import { prisma } from '../prisma';
 import { dockerService } from '../services/docker.service';
+import { importService } from '../services/import.service';
 
 const execAsync = util.promisify(exec);
 
@@ -163,6 +164,47 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     } catch (err: any) {
       return reply.status(500).send({ error: err.message });
     }
+  });
+
+  // Initiate Server Migration / Import (from Pterodactyl, SFTP, FTP)
+  fastify.post('/:id/import', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const schema = z.object({
+      serverType: z.enum(['SFTP', 'FTP']).default('SFTP'),
+      host: z.string().min(1, 'Host is a required field'),
+      port: z.number().default(2022),
+      username: z.string().min(1, 'Username is a required field'),
+      password: z.string().min(1, 'Password is a required field'),
+      baseDirectory: z.string().optional().default('/'),
+      deleteFiles: z.boolean().optional().default(false),
+    });
+
+    const body = schema.parse(request.body);
+
+    // Stop container first if running so files are not locked
+    try {
+      const container = await dockerService.findContainerByName(`nexus-${id}`);
+      if (container && container.State === 'running') {
+        await dockerService.stopContainer(container.Id);
+      }
+    } catch {}
+
+    const job = await importService.startImport({
+      serviceId: id,
+      ...body,
+    });
+
+    return reply.send({ success: true, message: 'Migración iniciada en segundo plano', job });
+  });
+
+  // Get Server Migration / Import Progress
+  fastify.get('/:id/import/status', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const job = importService.getJob(id);
+    if (!job) {
+      return reply.send({ status: 'IDLE' });
+    }
+    return reply.send(job);
   });
 
   // -------------------------------------------------------------

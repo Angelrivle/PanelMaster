@@ -11,6 +11,7 @@ import { nodesRoutes } from './routes/nodes.routes';
 import { templatesRoutes } from './routes/templates.routes';
 import { mailRoutes } from './routes/mail.routes';
 import { sftpService } from './services/sftp.service';
+import { dockerService } from './services/docker.service';
 import bcrypt from 'bcryptjs';
 import { prisma } from './prisma';
 
@@ -105,6 +106,14 @@ async function bootstrap() {
 
     // Start native SFTP daemon on port 2022
     sftpService.start();
+
+    // Start Docker daemon event listener for real-time lifecycle tracking (like Pterodactyl Wings)
+    dockerService.startDaemonEventListener();
+    dockerService.onContainerEvent(async (ev) => {
+      const dbStatus = ev.status === 'RUNNING' ? 'RUNNING' : 'STOPPED';
+      await prisma.service.updateMany({ where: { id: ev.serviceId }, data: { status: dbStatus } });
+      await prisma.serviceInstance.updateMany({ where: { serviceId: ev.serviceId }, data: { status: dbStatus } });
+    });
   } catch (err) {
     app.log.error(err);
     process.exit(1);

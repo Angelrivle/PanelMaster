@@ -20,6 +20,7 @@
     "@fastify/websocket": "^10.0.1",
     "@prisma/client": "^5.14.0",
     "axios": "^1.7.2",
+    "basic-ftp": "^6.2.6",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "fastify": "^4.27.0",

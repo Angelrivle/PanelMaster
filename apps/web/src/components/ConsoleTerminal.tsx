@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
-import { Play, Square, RotateCw, Terminal as TermIcon, Wifi, WifiOff, ZapOff } from 'lucide-react';
+import { Play, Square, RotateCw, Terminal as TermIcon, Wifi, WifiOff, ZapOff, Trash2, Copy, Check } from 'lucide-react';
+import { toast } from './Toast';
 
 interface ConsoleTerminalProps {
   serviceId: string;
@@ -25,6 +26,28 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
   const [commandInput, setCommandInput] = useState<string>('');
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  const [copiedConsole, setCopiedConsole] = useState<boolean>(false);
+
+  const handleClearConsole = () => {
+    if (xtermInstance.current) {
+      xtermInstance.current.clear();
+      toast.success('Consola limpiada.');
+    }
+  };
+
+  const handleCopyConsole = () => {
+    if (xtermInstance.current) {
+      xtermInstance.current.selectAll();
+      const selection = xtermInstance.current.getSelection();
+      xtermInstance.current.clearSelection();
+      if (selection) {
+        navigator.clipboard.writeText(selection);
+        setCopiedConsole(true);
+        setTimeout(() => setCopiedConsole(false), 2000);
+        toast.success('Salida de consola copiada al portapapeles.');
+      }
+    }
+  };
 
   useEffect(() => {
     setIsOnline(serviceStatus === 'RUNNING');
@@ -217,8 +240,27 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
           </span>
         </div>
 
-        {/* Quick Power Controls (Start, Restart, Stop, Kill like Pterodactyl) */}
+        {/* Terminal Utilities & Quick Power Controls (like Pterodactyl) */}
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 mr-1 border-r border-slate-700/80 pr-2">
+            <button
+              type="button"
+              onClick={handleClearConsole}
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer"
+              title="Limpiar consola (Clear screen)"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleCopyConsole}
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer"
+              title="Copiar texto de consola"
+            >
+              {copiedConsole ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+
           <button
             onClick={() => handlePowerAction('START')}
             disabled={isOnline}

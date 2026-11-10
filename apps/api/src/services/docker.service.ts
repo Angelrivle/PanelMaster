@@ -49,6 +49,64 @@ export class DockerService {
   private prevNetworkRx = 0;
   private prevNetworkTx = 0;
   private prevNetworkTime = Date.now();
+  private eventListeners: Array<(event: { serviceId: string; status: 'RUNNING' | 'STOPPED' | 'OOM' }) => void> = [];
+
+  onContainerEvent(cb: (event: { serviceId: string; status: 'RUNNING' | 'STOPPED' | 'OOM' }) => void) {
+    this.eventListeners.push(cb);
+  }
+
+  startDaemonEventListener() {
+    if (!this.isAvailable()) return;
+
+    const connectEvents = () => {
+      try {
+        const req = http.request(
+          {
+            socketPath: this.socketPath,
+            path: '/v1.43/events?filters=%7B%22type%22%3A%5B%22container%22%5D%7D',
+            method: 'GET',
+          },
+          (res) => {
+            let buffer = '';
+            res.on('data', (chunk) => {
+              buffer += chunk.toString('utf-8');
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+              for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                  const ev = JSON.parse(line.trim());
+                  const cName = ev.Actor?.Attributes?.name || '';
+                  if (cName.startsWith('nexus-') || cName.startsWith('/nexus-')) {
+                    const sId = cName.replace(/^\/?nexus-/, '');
+                    let newStatus: 'RUNNING' | 'STOPPED' | 'OOM' | null = null;
+                    if (ev.status === 'start') newStatus = 'RUNNING';
+                    else if (ev.status === 'die' || ev.status === 'stop' || ev.status === 'kill') newStatus = 'STOPPED';
+                    else if (ev.status === 'oom') newStatus = 'OOM';
+
+                    if (newStatus) {
+                      this.eventListeners.forEach((listener) => listener({ serviceId: sId, status: newStatus! }));
+                    }
+                  }
+                } catch {}
+              }
+            });
+            res.on('end', () => {
+              setTimeout(connectEvents, 3000);
+            });
+          }
+        );
+        req.on('error', () => {
+          setTimeout(connectEvents, 5000);
+        });
+        req.end();
+      } catch {
+        setTimeout(connectEvents, 5000);
+      }
+    };
+
+    connectEvents();
+  }
 
   isAvailable(): boolean {
     try {

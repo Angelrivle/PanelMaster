@@ -20,6 +20,7 @@ import { ServerActivity } from './pages/server/ServerActivity';
 import { ServerSettings } from './pages/server/ServerSettings';
 import { ServerVersions } from './pages/server/ServerVersions';
 import { ServerModpacks } from './pages/server/ServerModpacks';
+import { ServerImport } from './pages/server/ServerImport';
 
 export function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('nexus_token'));
@@ -361,6 +362,10 @@ export function App() {
 
         {selectedServer && currentView === 'activity' && (
           <ServerActivity server={selectedServer} />
+        )}
+
+        {selectedServer && currentView === 'import' && (
+          <ServerImport server={selectedServer} onNavigate={handleNavigate} />
         )}
 
         {selectedServer && currentView === 'settings' && (

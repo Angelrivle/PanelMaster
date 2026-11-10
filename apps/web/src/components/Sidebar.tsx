@@ -28,6 +28,7 @@ import {
   PanelLeftOpen,
   ChevronRight,
   ChevronLeft,
+  ArrowDownToLine,
   Mail,
   Palette,
   LayoutGrid,
@@ -416,6 +417,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'backups', label: t.backups, icon: Archive },
     { id: 'users', label: t.users, icon: Users },
     { id: 'activity', label: t.activity, icon: Activity },
+    { id: 'import', label: isEs ? 'Importar / Migrar' : 'Import Server', icon: ArrowDownToLine },
     { id: 'settings', label: t.settings, icon: Settings },
   ];
 
