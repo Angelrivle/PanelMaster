@@ -626,12 +626,15 @@ export class DockerService {
           },
           Binds: [`${hostDataPath}:/data`],
           RestartPolicy: { Name: 'no' },
-          MemoryReservation: genericMemoryMb * 1024 * 1024,
-          Memory: (genericMemoryMb + 512) * 1024 * 1024,
-          MemorySwap: -1,
+          Memory: genericMemoryMb * 1024 * 1024,
+          MemoryReservation: Math.floor(genericMemoryMb * 0.75) * 1024 * 1024,
+          MemorySwap: genericMemoryMb * 1024 * 1024,
         },
         Tty: true,
         OpenStdin: true,
+        AttachStdin: true,
+        AttachStdout: true,
+        AttachStderr: true,
       };
 
       if (startupCmd && !genericImage.includes('redis')) {
@@ -724,20 +727,32 @@ export class DockerService {
       image = fallbackImage;
     }
 
-    // Balanced JVM memory (65-70% heap, remaining for Metaspace/Native Netty to completely prevent OOM)
-    const jvmHeapMb = Math.max(1024, Math.floor(memoryMb * 0.70));
+    // Balanced JVM memory (70% heap, remaining 30% for JVM Metaspace/Native Netty)
+    const jvmHeapMb = Math.max(512, Math.floor(memoryMb * 0.70));
     const portKey = `${port}/tcp`;
 
     // Host Config with Pterodactyl container lifecycle:
     // Pure java execution without any itzg wrappers or mc-image-helper!
+    const startupScript = [
+      'if [ ! -f eula.txt ]; then echo "eula=true" > eula.txt; fi;',
+      'JAR_FILE="server.jar";',
+      'if [ ! -f "$JAR_FILE" ]; then',
+      '  FOUND_JAR=$(ls -1 *.jar 2>/dev/null | grep -v "installer" | head -n 1);',
+      '  if [ -n "$FOUND_JAR" ] && [ -f "$FOUND_JAR" ]; then JAR_FILE="$FOUND_JAR"; fi;',
+      'fi;',
+      'if [ ! -f "$JAR_FILE" ]; then',
+      '  echo "[PanelMaster] Error: No se encontro ningun archivo .jar para ejecutar en /data";',
+      '  echo "[PanelMaster] Por favor instala una version desde la seccion Versiones o sube un server.jar.";',
+      '  exit 1;',
+      'fi;',
+      'echo "[PanelMaster] Iniciando Minecraft con $JAR_FILE (Java heap: ' + jvmHeapMb + 'MB)...";',
+      `exec java -Xms128M -Xmx${jvmHeapMb}M -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -Dterminal.jline=false -Dterminal.ansi=true -jar "$JAR_FILE" nogui`
+    ].join(' ');
+
     const createPayload: any = {
       Image: image,
       WorkingDir: '/data',
-      Cmd: [
-        'sh',
-        '-c',
-        `if [ ! -f eula.txt ]; then echo "eula=true" > eula.txt; fi; exec java -Xms256M -Xmx${jvmHeapMb}M -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -Dterminal.jline=false -Dterminal.ansi=true -jar server.jar nogui`
-      ],
+      Cmd: ['sh', '-c', startupScript],
       Env: [
         `SERVER_PORT=${port}`,
         `SERVER_MEMORY=${memoryMb}`,
@@ -753,12 +768,15 @@ export class DockerService {
         },
         Binds: [`${hostDataPath}:/data`],
         RestartPolicy: { Name: 'no' },
-        MemoryReservation: memoryMb * 1024 * 1024,
-        Memory: (memoryMb + 1024) * 1024 * 1024,
-        MemorySwap: -1,
+        Memory: memoryMb * 1024 * 1024,
+        MemoryReservation: Math.floor(memoryMb * 0.75) * 1024 * 1024,
+        MemorySwap: memoryMb * 1024 * 1024,
       },
       Tty: true,
       OpenStdin: true,
+      AttachStdin: true,
+      AttachStdout: true,
+      AttachStderr: true,
     };
 
     try {
