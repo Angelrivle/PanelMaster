@@ -392,6 +392,7 @@ export const ServerVersions: React.FC<ServerVersionsProps> = ({ server, onUpdate
           build: installConfirm.build.build,
           java: installConfirm.build.java,
           cleanInstall: installConfirm.cleanInstall,
+          jarUrl: installConfirm.build.jarUrl,
         }),
       });
 

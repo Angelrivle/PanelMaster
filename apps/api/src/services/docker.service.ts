@@ -226,12 +226,122 @@ export class DockerService {
     } catch {}
   }
 
+  async downloadServerJar(serviceId: string, jarUrl: string): Promise<boolean> {
+    const hostDataPath = `/var/lib/panelmaster/volumes/${serviceId}`;
+    if (!fs.existsSync(hostDataPath)) {
+      fs.mkdirSync(hostDataPath, { recursive: true });
+    }
+    const jarPath = path.join(hostDataPath, 'server.jar');
+    try {
+      console.log(`[DockerService] Downloading server jar from: ${jarUrl}`);
+      const res = await fetch(jarUrl, {
+        headers: { 'User-Agent': 'PanelMaster/1.0 (https://panelmaster.dev)' },
+        signal: AbortSignal.timeout(120000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      fs.writeFileSync(jarPath, buf);
+      console.log(`[DockerService] Successfully saved server.jar (${(buf.length / (1024 * 1024)).toFixed(1)} MB)`);
+      return true;
+    } catch (err: any) {
+      console.error(`[DockerService] Error downloading server jar: ${err.message}`);
+      return false;
+    }
+  }
+
+  async ensureLatestMinecraftJar(serviceId: string): Promise<{ fork: string; version: string; java: number }> {
+    const hostDataPath = `/var/lib/panelmaster/volumes/${serviceId}`;
+    if (!fs.existsSync(hostDataPath)) {
+      fs.mkdirSync(hostDataPath, { recursive: true });
+    }
+
+    // 1. Ensure eula.txt exists with eula=true
+    const eulaPath = path.join(hostDataPath, 'eula.txt');
+    if (!fs.existsSync(eulaPath)) {
+      fs.writeFileSync(
+        eulaPath,
+        '#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\neula=true\n',
+        'utf8'
+      );
+    }
+
+    // 2. Ensure server.properties exists with RCON & port
+    const propsPath = path.join(hostDataPath, 'server.properties');
+    if (!fs.existsSync(propsPath)) {
+      fs.writeFileSync(
+        propsPath,
+        'server-port=25565\nenable-rcon=true\nrcon.password=panelmaster-rcon\nrcon.port=25575\nonline-mode=false\nmotd=A PanelMaster Minecraft Server\n',
+        'utf8'
+      );
+    }
+
+    const jarPath = path.join(hostDataPath, 'server.jar');
+    if (fs.existsSync(jarPath) && fs.statSync(jarPath).size > 1000000) {
+      const saved = this.getServerConfig(serviceId);
+      return { fork: saved.fork || 'Paper', version: saved.version || 'Latest', java: saved.java || 25 };
+    }
+
+    // Auto-fetch latest release build from MCJars API
+    try {
+      const res = await fetch('https://mcjars.app/api/v2/builds/paper', {
+        headers: { 'User-Agent': 'PanelMaster/1.0' },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (res.ok) {
+        const data: any = await res.json();
+        if (data && data.builds) {
+          const versions = Object.keys(data.builds);
+          const latestVer = versions[versions.length - 1];
+          const info = data.builds[latestVer];
+          const jarUrl = info?.latest?.jarUrl;
+          const javaReq = info?.java || 25;
+          if (jarUrl) {
+            await this.downloadServerJar(serviceId, jarUrl);
+            return { fork: 'Paper', version: latestVer, java: javaReq };
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error(`[DockerService] Could not auto-fetch latest MC build: ${err.message}`);
+    }
+
+    return { fork: 'Paper', version: '26.3', java: 25 };
+  }
+
   async updateServerVersion(
     serviceId: string,
-    options: { fork: string; version: string; build?: string; java?: number; cleanInstall?: boolean }
+    options: {
+      fork: string;
+      version: string;
+      build?: string;
+      java?: number;
+      cleanInstall?: boolean;
+      jarUrl?: string;
+    }
   ) {
     const hostDataPath = `/var/lib/panelmaster/volumes/${serviceId}`;
     const prevConfig = this.getServerConfig(serviceId);
+
+    // If jarUrl is provided, download it directly to server.jar
+    if (options.jarUrl) {
+      await this.downloadServerJar(serviceId, options.jarUrl);
+    } else {
+      try {
+        const rawFork = (options.fork || 'paper').trim().toLowerCase();
+        const res = await fetch(`https://mcjars.app/api/v2/builds/${rawFork}`, {
+          headers: { 'User-Agent': 'PanelMaster/1.0' },
+          signal: AbortSignal.timeout(15000),
+        });
+        if (res.ok) {
+          const data: any = await res.json();
+          const buildInfo = data?.builds?.[options.version];
+          const jarUrl = buildInfo?.latest?.jarUrl;
+          if (jarUrl) {
+            await this.downloadServerJar(serviceId, jarUrl);
+          }
+        }
+      } catch {}
+    }
 
     // Normalize fork name to itzg TYPE
     const rawFork = (options.fork || 'paper').trim().toLowerCase();
@@ -548,118 +658,92 @@ export class DockerService {
     }
 
     // ==========================================
-    // 2. MINECRAFT CONTAINER
+    // 2. MINECRAFT CONTAINER (Pterodactyl Pure Architecture)
     // ==========================================
     const port = options.port || savedConfig.port || 25565;
     const memoryMb = options.memoryMb || savedConfig.memoryMb || 2048;
-    const serverType = options.environment?.TYPE || savedConfig.type || 'PAPER';
-    const serverVersion = options.environment?.VERSION || savedConfig.version || '1.20.4';
+    const isModpack = !!(savedConfig.modPlatform && savedConfig.modpack);
 
-    // Match Docker Java image to Minecraft version
-    let image = options.image;
-    if (image && image.includes('panelmaster/images:java-')) {
-      // Translate custom runtime selection to itzg image
-      const jv = parseInt(image.split('java-')[1], 10);
-      if (jv === 8) image = 'itzg/minecraft-server:java8';
-      else if (jv === 11) image = 'itzg/minecraft-server:java11';
-      else if (jv === 16 || jv === 17) image = 'itzg/minecraft-server:java17';
-      else image = 'itzg/minecraft-server:java21';
-    } else if (!image || image === 'itzg/minecraft-server:latest') {
-      const javaVer = savedConfig.java;
-      if (javaVer === 8) {
-        image = 'itzg/minecraft-server:java8';
-      } else if (javaVer === 11) {
-        image = 'itzg/minecraft-server:java11';
-      } else if (javaVer === 16 || javaVer === 17) {
-        image = 'itzg/minecraft-server:java17';
-      } else if (javaVer >= 18) {
-        image = 'itzg/minecraft-server:java21';
-      } else {
-        const match = serverVersion.match(/^1\.(\d+)/);
-        if (match) {
-          const minor = parseInt(match[1], 10);
-          if (minor <= 16) {
-            image = 'itzg/minecraft-server:java8';
-          } else if (minor <= 20) {
-            if (serverVersion.startsWith('1.20.5') || serverVersion.startsWith('1.20.6')) {
-              image = 'itzg/minecraft-server:java21';
-            } else {
-              image = 'itzg/minecraft-server:java17';
-            }
-          } else {
-            image = 'itzg/minecraft-server:java21';
-          }
+    // Ensure server.jar, eula.txt, and server.properties exist in /data
+    if (!isModpack) {
+      await this.ensureLatestMinecraftJar(options.serviceId);
+    }
+
+    // Determine target Java version
+    let javaVer = savedConfig.java;
+    if (!javaVer) {
+      const match = (savedConfig.version || '').match(/^1\.(\d+)/);
+      if (match) {
+        const minor = parseInt(match[1], 10);
+        if (minor <= 16) javaVer = 8;
+        else if (minor <= 20) {
+          javaVer = (savedConfig.version?.startsWith('1.20.5') || savedConfig.version?.startsWith('1.20.6')) ? 21 : 17;
         } else {
-          image = 'itzg/minecraft-server:java21';
+          javaVer = 21;
         }
+      } else {
+        // Modern Minecraft (e.g. 26.1, 26.2, 26.3) requires Java 25
+        javaVer = 25;
       }
     }
 
+    // Official Pterodactyl Java Yolks with Java 25 & fallback to Eclipse Temurin
+    let image = 'ghcr.io/pterodactyl/yolks:java_21';
+    let fallbackImage = 'eclipse-temurin:21-jdk';
+
+    if (javaVer >= 25) {
+      image = 'ghcr.io/pterodactyl/yolks:java_25';
+      fallbackImage = 'eclipse-temurin:25-jdk';
+    } else if (javaVer === 24) {
+      image = 'ghcr.io/pterodactyl/yolks:java_24';
+      fallbackImage = 'eclipse-temurin:24-jdk';
+    } else if (javaVer === 23) {
+      image = 'ghcr.io/pterodactyl/yolks:java_23';
+      fallbackImage = 'eclipse-temurin:23-jdk';
+    } else if (javaVer === 22) {
+      image = 'ghcr.io/pterodactyl/yolks:java_22';
+      fallbackImage = 'eclipse-temurin:22-jdk';
+    } else if (javaVer === 21) {
+      image = 'ghcr.io/pterodactyl/yolks:java_21';
+      fallbackImage = 'eclipse-temurin:21-jdk';
+    } else if (javaVer === 17 || javaVer === 16) {
+      image = 'ghcr.io/pterodactyl/yolks:java_17';
+      fallbackImage = 'eclipse-temurin:17-jdk';
+    } else if (javaVer === 11) {
+      image = 'ghcr.io/pterodactyl/yolks:java_11';
+      fallbackImage = 'eclipse-temurin:11-jdk';
+    } else if (javaVer === 8) {
+      image = 'ghcr.io/pterodactyl/yolks:java_8';
+      fallbackImage = 'eclipse-temurin:8-jdk';
+    }
+
     // Pull image in background if needed
-    await this.ensureImage(image);
+    const pulled = await this.ensureImage(image);
+    if (!pulled) {
+      await this.ensureImage(fallbackImage);
+      image = fallbackImage;
+    }
 
     // Balanced JVM memory (65-70% heap, remaining for Metaspace/Native Netty to completely prevent OOM)
     const jvmHeapMb = Math.max(1024, Math.floor(memoryMb * 0.70));
-    const isModpack = !!(savedConfig.modPlatform && savedConfig.modpack);
-
-    const envMap: Record<string, string> = {
-      EULA: 'TRUE',
-      VERSION: serverVersion,
-      ONLINE_MODE: 'FALSE',
-      MAX_PLAYERS: '20',
-      ENABLE_RCON: 'true',
-      RCON_PASSWORD: 'panelmaster-rcon',
-      RCON_PORT: '25575',
-      BROADCAST_RCON_TO_OPS: 'false',
-      INIT_MEMORY: `${Math.min(1024, jvmHeapMb)}M`,
-      MAX_MEMORY: `${jvmHeapMb}M`,
-      MEMORY: `${jvmHeapMb}M`,
-      USE_AIKARS_FLAGS: 'true',
-      STOP_SERVER_ON_CONTAINER_EXIT: 'false',
-      JVM_XX_OPTS: '-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC',
-      ...(isModpack
-        ? {
-            MODPACK_PLATFORM: 'MODRINTH',
-            MODRINTH_MODPACK: savedConfig.modpack,
-            MODRINTH_VERSION_TYPE: 'release,beta,alpha',
-            MODRINTH_ALLOWED_VERSION_TYPE: 'release,beta,alpha',
-            MODRINTH_DEFAULT_VERSION_TYPE: 'alpha',
-            VERSION_TYPE: 'release,beta,alpha',
-            ...(savedConfig.modpackVersion && savedConfig.modpackVersion !== 'latest'
-              ? { MODRINTH_VERSION: savedConfig.modpackVersion }
-              : {}),
-            ...(savedConfig.loader
-              ? { MODRINTH_LOADER: savedConfig.loader.toLowerCase() }
-              : {}),
-          }
-        : {
-            TYPE: serverType,
-          }),
-      ...(options.environment || {}),
-    };
-
-    // Prevent conflicts between TYPE and MODPACK_PLATFORM
-    if (isModpack) {
-      delete envMap.TYPE;
-      envMap.MODRINTH_VERSION_TYPE = 'release,beta,alpha';
-      envMap.MODRINTH_ALLOWED_VERSION_TYPE = 'release,beta,alpha';
-    } else {
-      delete envMap.MODPACK_PLATFORM;
-      delete envMap.MODRINTH_MODPACK;
-      delete envMap.MODRINTH_VERSION;
-      delete envMap.MODRINTH_LOADER;
-      delete envMap.MODRINTH_VERSION_TYPE;
-      delete envMap.MODRINTH_ALLOWED_VERSION_TYPE;
-      delete envMap.MODRINTH_DEFAULT_VERSION_TYPE;
-    }
-
-    const envArray = Object.entries(envMap).map(([k, v]) => `${k}=${v}`);
     const portKey = `${port}/tcp`;
 
-    // Host Config with Pterodactyl container lifecycle: RestartPolicy = 'no' so Docker never auto-restarts into crash loops
-    const createPayload = {
+    // Host Config with Pterodactyl container lifecycle:
+    // Pure java execution without any itzg wrappers or mc-image-helper!
+    const createPayload: any = {
       Image: image,
-      Env: envArray,
+      WorkingDir: '/data',
+      Cmd: [
+        'sh',
+        '-c',
+        `if [ ! -f eula.txt ]; then echo "eula=true" > eula.txt; fi; exec java -Xms256M -Xmx${jvmHeapMb}M -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -Dterminal.jline=false -Dterminal.ansi=true -jar server.jar nogui`
+      ],
+      Env: [
+        `SERVER_PORT=${port}`,
+        `SERVER_MEMORY=${memoryMb}`,
+        `TERM=xterm-256color`,
+        `EULA=true`,
+      ],
       ExposedPorts: {
         [portKey]: {},
       },

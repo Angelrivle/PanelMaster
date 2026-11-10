@@ -114,6 +114,7 @@ export async function servicesRoutes(fastify: FastifyInstance) {
       build?: string;
       java?: number;
       cleanInstall?: boolean;
+      jarUrl?: string;
     };
 
     try {
@@ -827,7 +828,26 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     });
 
     const isNonMinecraft = body.category && body.category !== 'minecraft';
-    const effectiveImage = body.dockerImage || version.dockerImage || (body.category === 'databases' ? 'redis:7-alpine' : 'itzg/minecraft-server:latest');
+    const effectiveImage = body.dockerImage || version.dockerImage || (body.category === 'databases' ? 'redis:7-alpine' : 'ghcr.io/pterodactyl/yolks:java_25');
+
+    let mcInitial = {
+      type: 'PAPER',
+      version: '26.3',
+      fork: 'Paper',
+      java: 25,
+      modPlatform: null,
+      modpack: null,
+    };
+
+    if (!isNonMinecraft) {
+      const autoFetched = await dockerService.ensureLatestMinecraftJar(service.id);
+      if (autoFetched) {
+        mcInitial.fork = autoFetched.fork;
+        mcInitial.type = autoFetched.fork.toUpperCase();
+        mcInitial.version = autoFetched.version;
+        mcInitial.java = autoFetched.java;
+      }
+    }
 
     // Save initial server configuration in panelmaster.json
     dockerService.saveServerConfig(service.id, {
@@ -840,14 +860,7 @@ export async function servicesRoutes(fastify: FastifyInstance) {
       startupCommand: body.startupCommand || version.startupCommand,
       memoryMb: body.memoryMb,
       environment: body.environment || {},
-      ...(isNonMinecraft ? {} : {
-        type: 'PAPER',
-        version: '1.20.4',
-        fork: 'Paper',
-        java: 17,
-        modPlatform: null,
-        modpack: null,
-      }),
+      ...(isNonMinecraft ? {} : mcInitial),
     });
 
     // Spawn REAL Docker container on host
