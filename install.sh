@@ -252,7 +252,8 @@ echo -e "${CYAN}[6/6] Compilando e iniciando microservicios con Docker Compose..
 cd "${INSTALL_DIR}"
 
 docker compose down --remove-orphans >/dev/null 2>&1 || docker-compose down --remove-orphans >/dev/null 2>&1 || true
-docker compose build || docker-compose build
+COMPOSE_PARALLEL_LIMIT=1 docker compose build api || COMPOSE_PARALLEL_LIMIT=1 docker-compose build api
+COMPOSE_PARALLEL_LIMIT=1 docker compose build web || COMPOSE_PARALLEL_LIMIT=1 docker-compose build web
 docker compose up -d || docker-compose up -d
 
 echo -e "${YELLOW}[*] Esperando inicialización de PostgreSQL y servicios...${NC}"

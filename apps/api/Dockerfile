@@ -29,10 +29,7 @@ ENV PORT=3000
 
 COPY package*.json ./
 COPY prisma ./prisma/
-
-RUN npm ci --omit=dev
-RUN npx prisma generate
-
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh

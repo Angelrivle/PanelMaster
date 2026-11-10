@@ -27,8 +27,9 @@ if [ -d ".git" ]; then
   git pull origin main || git pull
 fi
 
-echo -e "${YELLOW}[*] Reconstruyendo contenedores de producción...${NC}"
-docker compose build || docker-compose build
+echo -e "${YELLOW}[*] Reconstruyendo contenedores de producción secuencialmente...${NC}"
+COMPOSE_PARALLEL_LIMIT=1 docker compose build api || COMPOSE_PARALLEL_LIMIT=1 docker-compose build api
+COMPOSE_PARALLEL_LIMIT=1 docker compose build web || COMPOSE_PARALLEL_LIMIT=1 docker-compose build web
 docker compose up -d --remove-orphans || docker-compose up -d --remove-orphans
 
 echo -e "${YELLOW}[*] Sincronizando esquema de base de datos...${NC}"
