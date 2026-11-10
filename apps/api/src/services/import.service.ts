@@ -16,6 +16,26 @@ export interface ImportOptions {
   deleteFiles?: boolean;
 }
 
+export function parseRemoteHost(rawHost: string, fallbackPort = 2022): { host: string; port: number } {
+  let host = (rawHost || '').trim();
+  // Strip protocol prefixes (e.g. sftp://, ftp://, ssh://)
+  host = host.replace(/^[a-z0-9]+:\/\//i, '');
+  // Strip any trailing path or slash
+  host = host.replace(/\/.*$/, '').trim();
+
+  let port = fallbackPort;
+  if (host.includes(':')) {
+    const parts = host.split(':');
+    host = parts[0].trim();
+    const parsed = parseInt(parts[1], 10);
+    if (!isNaN(parsed) && parsed > 0 && parsed <= 65535) {
+      port = parsed;
+    }
+  }
+
+  return { host, port };
+}
+
 export interface ImportJobState {
   serviceId: string;
   status: 'PENDING' | 'CONNECTING' | 'TRANSFERRING' | 'COMPLETED' | 'FAILED';
@@ -46,13 +66,19 @@ class ImportService {
     const baseDir = (options.baseDirectory || '/').trim() || '/';
     const hostDataPath = `/var/lib/panelmaster/volumes/${serviceId}`;
 
+    // Clean and sanitize host / port (e.g. if user pasted "sftp://rosalie.bloom.host:2022")
+    const fallbackPort = options.serverType === 'SFTP' ? 2022 : 21;
+    const parsed = parseRemoteHost(options.host, options.port || fallbackPort);
+    options.host = parsed.host;
+    options.port = parsed.port;
+
     const job: ImportJobState = {
       serviceId,
       status: 'CONNECTING',
       serverType: options.serverType,
       host: options.host,
-      port: options.port || (options.serverType === 'SFTP' ? 2022 : 21),
-      username: options.username,
+      port: options.port,
+      username: options.username.trim(),
       baseDirectory: baseDir,
       deleteFiles: !!options.deleteFiles,
       totalFiles: 0,

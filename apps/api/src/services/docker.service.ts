@@ -131,11 +131,19 @@ export class DockerService {
           let data = '';
           res.on('data', (chunk) => (data += chunk));
           res.on('end', () => {
+            let parsed: any = null;
             try {
-              resolve(data ? JSON.parse(data) : null);
+              parsed = data ? JSON.parse(data) : null;
             } catch {
-              resolve(data);
+              parsed = data;
             }
+            if (res.statusCode && res.statusCode >= 400) {
+              const msg = parsed?.message || (typeof parsed === 'string' ? parsed : `Docker HTTP ${res.statusCode}`);
+              const err = new Error(msg);
+              (err as any).statusCode = res.statusCode;
+              return reject(err);
+            }
+            resolve(parsed);
           });
         }
       );
@@ -257,6 +265,13 @@ export class DockerService {
         const configPath = path.join(hostDataPath, 'config');
         if (fs.existsSync(configPath)) fs.rmSync(configPath, { recursive: true, force: true });
 
+        // Clean modpack markers and cached engine states
+        const modpackMarkers = ['.modrinth-modpack', '.modrinth', '.fabric', '.quilt', '.forge', '.neoforge', '.curseforge'];
+        for (const marker of modpackMarkers) {
+          const mPath = path.join(hostDataPath, marker);
+          if (fs.existsSync(mPath)) fs.rmSync(mPath, { recursive: true, force: true });
+        }
+
         if (fs.existsSync(hostDataPath)) {
           const items = fs.readdirSync(hostDataPath);
           for (const item of items) {
@@ -270,8 +285,14 @@ export class DockerService {
               item === 'spigot.yml' ||
               item === 'bukkit.yml' ||
               item === 'paper-global.yml' ||
-              item === 'paper-world-defaults.yml'
+              item === 'paper-world-defaults.yml' ||
+              item === 'usercache.json'
             ) {
+              fs.rmSync(itemPath, { recursive: true, force: true });
+            }
+
+            // On full cleanInstall, also wipe plugins
+            if (options.cleanInstall && item === 'plugins') {
               fs.rmSync(itemPath, { recursive: true, force: true });
             }
           }
@@ -281,11 +302,15 @@ export class DockerService {
             for (const worldDir of ['world', 'world_nether', 'world_the_end']) {
               const targetDir = path.join(hostDataPath, worldDir);
               if (fs.existsSync(targetDir)) {
-                const backupName = `${worldDir}_backup_${(prevConfig.version || 'old').replace(/\./g, '_')}_${Date.now()}`;
-                try {
-                  fs.renameSync(targetDir, path.join(hostDataPath, backupName));
-                } catch {
+                if (options.cleanInstall) {
                   fs.rmSync(targetDir, { recursive: true, force: true });
+                } else {
+                  const backupName = `${worldDir}_backup_${(prevConfig.version || 'old').replace(/\./g, '_')}_${Date.now()}`;
+                  try {
+                    fs.renameSync(targetDir, path.join(hostDataPath, backupName));
+                  } catch {
+                    fs.rmSync(targetDir, { recursive: true, force: true });
+                  }
                 }
               }
             }
@@ -532,15 +557,22 @@ export class DockerService {
 
     // Match Docker Java image to Minecraft version
     let image = options.image;
-    if (!image || image === 'itzg/minecraft-server:latest') {
+    if (image && image.includes('panelmaster/images:java-')) {
+      // Translate custom runtime selection to itzg image
+      const jv = parseInt(image.split('java-')[1], 10);
+      if (jv === 8) image = 'itzg/minecraft-server:java8';
+      else if (jv === 11) image = 'itzg/minecraft-server:java11';
+      else if (jv === 16 || jv === 17) image = 'itzg/minecraft-server:java17';
+      else image = 'itzg/minecraft-server:java21';
+    } else if (!image || image === 'itzg/minecraft-server:latest') {
       const javaVer = savedConfig.java;
       if (javaVer === 8) {
         image = 'itzg/minecraft-server:java8';
       } else if (javaVer === 11) {
         image = 'itzg/minecraft-server:java11';
-      } else if (javaVer === 17) {
+      } else if (javaVer === 16 || javaVer === 17) {
         image = 'itzg/minecraft-server:java17';
-      } else if (javaVer === 21) {
+      } else if (javaVer >= 18) {
         image = 'itzg/minecraft-server:java21';
       } else {
         const match = serverVersion.match(/^1\.(\d+)/);
@@ -589,9 +621,10 @@ export class DockerService {
         ? {
             MODPACK_PLATFORM: 'MODRINTH',
             MODRINTH_MODPACK: savedConfig.modpack,
-            MODRINTH_ALLOWED_VERSION_TYPE: 'alpha,beta,release',
+            MODRINTH_VERSION_TYPE: 'release,beta,alpha',
+            MODRINTH_ALLOWED_VERSION_TYPE: 'release,beta,alpha',
             MODRINTH_DEFAULT_VERSION_TYPE: 'alpha',
-            VERSION_TYPE: 'alpha,beta,release',
+            VERSION_TYPE: 'release,beta,alpha',
             ...(savedConfig.modpackVersion && savedConfig.modpackVersion !== 'latest'
               ? { MODRINTH_VERSION: savedConfig.modpackVersion }
               : {}),
@@ -604,6 +637,21 @@ export class DockerService {
           }),
       ...(options.environment || {}),
     };
+
+    // Prevent conflicts between TYPE and MODPACK_PLATFORM
+    if (isModpack) {
+      delete envMap.TYPE;
+      envMap.MODRINTH_VERSION_TYPE = 'release,beta,alpha';
+      envMap.MODRINTH_ALLOWED_VERSION_TYPE = 'release,beta,alpha';
+    } else {
+      delete envMap.MODPACK_PLATFORM;
+      delete envMap.MODRINTH_MODPACK;
+      delete envMap.MODRINTH_VERSION;
+      delete envMap.MODRINTH_LOADER;
+      delete envMap.MODRINTH_VERSION_TYPE;
+      delete envMap.MODRINTH_ALLOWED_VERSION_TYPE;
+      delete envMap.MODRINTH_DEFAULT_VERSION_TYPE;
+    }
 
     const envArray = Object.entries(envMap).map(([k, v]) => `${k}=${v}`);
     const portKey = `${port}/tcp`;

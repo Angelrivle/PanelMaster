@@ -11,6 +11,83 @@ interface ConsoleTerminalProps {
   onStatusChange?: (status: string) => void;
 }
 
+const MINECRAFT_COLOR_MAP: Record<string, string> = {
+  '0': '\x1b[30m',
+  '1': '\x1b[34m',
+  '2': '\x1b[32m',
+  '3': '\x1b[36m',
+  '4': '\x1b[31m',
+  '5': '\x1b[35m',
+  '6': '\x1b[33m',
+  '7': '\x1b[37m',
+  '8': '\x1b[90m',
+  '9': '\x1b[94m',
+  'a': '\x1b[92m',
+  'b': '\x1b[96m',
+  'c': '\x1b[91m',
+  'd': '\x1b[95m',
+  'e': '\x1b[93m',
+  'f': '\x1b[97m',
+  'l': '\x1b[1m',
+  'm': '\x1b[9m',
+  'n': '\x1b[4m',
+  'o': '\x1b[3m',
+  'r': '\x1b[0m',
+};
+
+function colorizeLogLine(line: string): string {
+  if (!line || typeof line !== 'string') return line;
+  let text = line.replace(/[\r\n]+$/, '');
+  if (!text) return '';
+
+  if (text.startsWith('{"message":') && text.includes('No such container')) {
+    return '\x1b[33m[PanelMaster] El contenedor anterior no existe. Creando nuevo contenedor...\x1b[0m';
+  }
+
+  if (text.includes('§')) {
+    text = text.replace(/§([0-9a-fk-orA-FK-OR])/g, (_, code) => {
+      const lower = code.toLowerCase();
+      return MINECRAFT_COLOR_MAP[lower] || '';
+    }) + '\x1b[0m';
+  }
+
+  if (text.startsWith('> ') || text.startsWith('\x1b[38;5;242m> ') || text.startsWith('\x1b[38;5;75m> ')) {
+    const rawCmd = text.replace(/^(\x1b\[[^m]+m> |> )/, '');
+    return `\x1b[1;34m❯ \x1b[1;37m${rawCmd}\x1b[0m`;
+  }
+
+  text = text.replace(
+    /^\[(\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+(INFO|WARN|WARNING|ERROR|FATAL|SEVERE|DEBUG|TRACE)\]:?\s*/i,
+    (_, time, level) => {
+      const lvlUpper = level.toUpperCase();
+      let lvlColor = '\x1b[32m';
+      if (lvlUpper === 'WARN' || lvlUpper === 'WARNING') lvlColor = '\x1b[33m';
+      else if (lvlUpper === 'ERROR' || lvlUpper === 'FATAL' || lvlUpper === 'SEVERE') lvlColor = '\x1b[31m';
+      else if (lvlUpper === 'DEBUG' || lvlUpper === 'TRACE') lvlColor = '\x1b[36m';
+      return `[\x1b[90m${time}\x1b[0m ${lvlColor}${lvlUpper}\x1b[0m]: `;
+    }
+  );
+
+  text = text.replace(
+    /^(\[\d{2}:\d{2}:\d{2}(?:\.\d+)?\]|\d{2}:\d{2}:\d{2})\s*/,
+    '\x1b[90m$1\x1b[0m '
+  );
+
+  text = text.replace(
+    /\[([^\]\/]+)\/(INFO|WARN|WARNING|ERROR|FATAL|SEVERE|DEBUG|TRACE)\]:?/i,
+    (_, thread, level) => {
+      const lvlUpper = level.toUpperCase();
+      let lvlColor = '\x1b[32m';
+      if (lvlUpper === 'WARN' || lvlUpper === 'WARNING') lvlColor = '\x1b[33m';
+      else if (lvlUpper === 'ERROR' || lvlUpper === 'FATAL' || lvlUpper === 'SEVERE') lvlColor = '\x1b[31m';
+      else if (lvlUpper === 'DEBUG' || lvlUpper === 'TRACE') lvlColor = '\x1b[36m';
+      return `[${thread}/${lvlColor}${lvlUpper}\x1b[0m]: `;
+    }
+  );
+
+  return text;
+}
+
 export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
   serviceId,
   serviceStatus,
@@ -77,10 +154,27 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
       },
     });
 
+    const safeFit = () => {
+      try {
+        if (!fitAddonRef.current || !terminalRef.current) return;
+        const el = terminalRef.current;
+        const width = el.clientWidth || el.offsetWidth;
+        const height = el.clientHeight || el.offsetHeight;
+        if (width > 60 && height > 40) {
+          fitAddonRef.current.fit();
+        }
+      } catch {}
+    };
+
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(terminalRef.current);
-    fitAddon.fit();
+    
+    // Smooth initial sizing with timeouts to accommodate tab transition animations
+    requestAnimationFrame(safeFit);
+    const t1 = setTimeout(safeFit, 60);
+    const t2 = setTimeout(safeFit, 180);
+    const t3 = setTimeout(safeFit, 400);
 
     // Enable native CTRL+C to copy selected text to clipboard
     term.attachCustomKeyEventHandler((arg: KeyboardEvent) => {
@@ -122,9 +216,17 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
           onStatusChange?.('RUNNING');
         }
 
-        // Normalize line endings for xterm so lines don't stair-step horizontally
-        const formatted = text.replace(/\r?\n/g, '\r\n');
-        term.write(formatted);
+        // Colorize lines and normalize line endings for xterm
+        const lines = text.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          const rawLine = lines[i];
+          const colorized = colorizeLogLine(rawLine);
+          if (i < lines.length - 1) {
+            term.writeln(colorized);
+          } else if (colorized) {
+            term.write(colorized);
+          }
+        }
       };
 
       ws.onclose = () => {
@@ -183,17 +285,24 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
     onAction(act);
   };
 
-  const sendCommand = (e: React.FormEvent) => {
-    e.preventDefault();
-    const clean = commandInput.trim();
+  const sendRawCommand = (cmd: string) => {
+    const clean = cmd.trim();
     if (!clean || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
 
     if (xtermInstance.current) {
-      xtermInstance.current.writeln(`\x1b[1;36m>\x1b[0m ${clean}`);
+      xtermInstance.current.writeln(`\x1b[1;34m❯ \x1b[1;37m${clean}\x1b[0m`);
     }
 
     socketRef.current.send(clean);
     setCommandHistory((prev) => [clean, ...prev.filter((c) => c !== clean)]);
+  };
+
+  const sendCommand = (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = commandInput.trim();
+    if (!clean) return;
+
+    sendRawCommand(clean);
     setHistoryIndex(-1);
     setCommandInput('');
   };
@@ -297,9 +406,24 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
       {/* Terminal Viewport */}
       <div ref={terminalRef} className="flex-1 p-2 overflow-hidden" />
 
+      {/* Quick Action Pills (ZenMicroHoster style) */}
+      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#090d16] border-t border-slate-800/80 overflow-x-auto text-[11px] font-mono">
+        <span className="text-slate-500 text-[10px] uppercase font-bold mr-1 shrink-0">Acciones rápidas:</span>
+        {['help', 'list', 'tps', 'status', 'save-all', 'plugins'].map((cmd) => (
+          <button
+            key={cmd}
+            type="button"
+            onClick={() => sendRawCommand(cmd)}
+            className="px-2 py-0.5 rounded bg-slate-800/70 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition cursor-pointer shrink-0"
+          >
+            {cmd}
+          </button>
+        ))}
+      </div>
+
       {/* Interactive Command Input Box with History */}
       <form onSubmit={sendCommand} className="flex items-center border-t border-slate-800 bg-[#0d1322] px-3 py-2">
-        <span className="text-sky-400 font-mono text-sm mr-2 font-bold">&gt;</span>
+        <span className="text-sky-400 font-mono text-sm mr-2 font-bold select-none">❯</span>
         <input
           type="text"
           value={commandInput}
@@ -310,7 +434,7 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
         />
         <button
           type="submit"
-          className="ml-2 px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded text-xs font-medium transition"
+          className="ml-2 px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded text-xs font-medium transition cursor-pointer"
         >
           Enviar
         </button>

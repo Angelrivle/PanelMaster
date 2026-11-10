@@ -27,6 +27,24 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
     if (type === 'FTP' && port === 2022) setPort(21);
   };
 
+  const handleHostChange = (val: string) => {
+    let clean = val.trim();
+    // Auto-clean pasted URLs e.g. sftp://mia-251008.bloom.host:2022
+    if (clean.includes('://')) {
+      clean = clean.replace(/^[a-z0-9]+:\/\//i, '');
+    }
+    clean = clean.replace(/\/.*$/, '');
+    if (clean.includes(':')) {
+      const [h, p] = clean.split(':');
+      clean = h;
+      const parsedPort = parseInt(p, 10);
+      if (!isNaN(parsedPort) && parsedPort > 0) {
+        setPort(parsedPort);
+      }
+    }
+    setHost(clean);
+  };
+
   // Poll active migration job status
   useEffect(() => {
     if (!server?.id) return;
@@ -128,9 +146,9 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
             {onNavigate && (
               <button
                 onClick={() => onNavigate('console')}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#272b34] hover:bg-[#343a46] text-zinc-200 text-xs font-semibold rounded-lg border border-[#3b414f] transition cursor-pointer"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#18181c] hover:bg-[#222227] text-zinc-200 text-xs font-semibold rounded-lg border border-[#27272a] transition cursor-pointer"
               >
-                <Terminal className="w-3.5 h-3.5 text-orange-400" />
+                <Terminal className="w-3.5 h-3.5 text-blue-400" />
                 Ver Consola
               </button>
             )}
@@ -138,7 +156,7 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
 
           <div className="flex items-center justify-between text-xs font-mono text-zinc-400 pt-1">
             <span>Archivos transferidos: <strong className="text-zinc-200">{jobStatus.transferredFiles || 0}</strong></span>
-            <span>Total descargado: <strong className="text-orange-400">{((jobStatus.bytesTransferred || 0) / (1024 * 1024)).toFixed(1)} MB</strong></span>
+            <span>Total descargado: <strong className="text-blue-400">{((jobStatus.bytesTransferred || 0) / (1024 * 1024)).toFixed(1)} MB</strong></span>
           </div>
         </div>
       )}
@@ -175,15 +193,15 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
         </div>
       )}
 
-      {/* Main Import Form Card matching the uploaded Screenshot */}
-      <div className="w-full bg-[#181a20] border border-[#2b303c] rounded-xl overflow-hidden shadow-xl">
-        {/* Orange Banner Header */}
-        <div className="bg-[#ea580c] text-white px-6 py-3.5 flex items-center justify-between font-bold tracking-wider text-sm uppercase">
+      {/* Main Import Form Card matching PanelMaster Dark Theme */}
+      <div className="w-full bg-[#111114] border border-[#1f1f23] rounded-2xl overflow-hidden shadow-sm">
+        {/* Dark Themed Header with Blue Accent */}
+        <div className="bg-[#18181c] border-b border-[#1f1f23] text-zinc-100 px-6 py-4 flex items-center justify-between font-bold text-sm">
           <div className="flex items-center gap-2">
-            <ArrowDownToLine className="w-4 h-4 text-white" />
-            <span>IMPORT SERVER</span>
+            <ArrowDownToLine className="w-4 h-4 text-blue-400" />
+            <span className="tracking-wide uppercase">IMPORT SERVER</span>
           </div>
-          <span className="text-xs font-mono font-medium opacity-90">PTERODACTYL & FTP READY</span>
+          <span className="text-[11px] bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2.5 py-0.5 rounded-full font-mono font-medium">PTERODACTYL & FTP READY</span>
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-6">
@@ -202,7 +220,7 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
                 <select
                   value={serverType}
                   onChange={(e) => handleTypeChange(e.target.value as any)}
-                  className="w-full bg-[#272b34] text-zinc-100 font-mono text-sm px-4 py-3 rounded-lg border border-[#3b414f] focus:outline-none focus:border-orange-500 cursor-pointer"
+                  className="w-full bg-[#09090b] text-zinc-100 font-mono text-xs px-4 py-2.5 rounded-xl border border-[#1f1f23] focus:outline-none focus:border-blue-500 cursor-pointer"
                 >
                   <option value="SFTP">SFTP (Pterodactyl, Bloom, Wisp - Puerto 2022 / 22)</option>
                   <option value="FTP">FTP (Multicraft, cPanel, Legacy - Puerto 21)</option>
@@ -217,11 +235,11 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
                 <input
                   type="text"
                   value={host}
-                  onChange={(e) => setHost(e.target.value)}
+                  onChange={(e) => handleHostChange(e.target.value)}
                   onBlur={() => setTouched((p) => ({ ...p, host: true }))}
-                  placeholder="ej. mia-251008.bloom.host o 51.38.125.71"
-                  className={`w-full bg-[#272b34] text-zinc-100 font-mono text-sm px-4 py-3 rounded-lg border focus:outline-none transition ${
-                    isHostError ? 'border-red-500' : 'border-[#3b414f] focus:border-orange-500'
+                  placeholder="ej. rosalie.bloom.host o 51.38.125.71"
+                  className={`w-full bg-[#09090b] text-zinc-100 font-mono text-xs px-4 py-2.5 rounded-xl border focus:outline-none transition ${
+                    isHostError ? 'border-red-500' : 'border-[#1f1f23] focus:border-blue-500'
                   }`}
                 />
                 {isHostError && (
@@ -240,8 +258,8 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
                   onChange={(e) => setPort(Number(e.target.value))}
                   onBlur={() => setTouched((p) => ({ ...p, port: true }))}
                   placeholder="2022"
-                  className={`w-full bg-[#272b34] text-zinc-100 font-mono text-sm px-4 py-3 rounded-lg border focus:outline-none transition ${
-                    isPortError ? 'border-red-500' : 'border-[#3b414f] focus:border-orange-500'
+                  className={`w-full bg-[#09090b] text-zinc-100 font-mono text-xs px-4 py-2.5 rounded-xl border focus:outline-none transition ${
+                    isPortError ? 'border-red-500' : 'border-[#1f1f23] focus:border-blue-500'
                   }`}
                 />
                 {isPortError && (
@@ -263,8 +281,8 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
                   onChange={(e) => setUsername(e.target.value)}
                   onBlur={() => setTouched((p) => ({ ...p, username: true }))}
                   placeholder="ej. angelriveradeveloperooa.7083669c"
-                  className={`w-full bg-[#272b34] text-zinc-100 font-mono text-sm px-4 py-3 rounded-lg border focus:outline-none transition ${
-                    isUserError ? 'border-red-500' : 'border-[#3b414f] focus:border-orange-500'
+                  className={`w-full bg-[#09090b] text-zinc-100 font-mono text-xs px-4 py-2.5 rounded-xl border focus:outline-none transition ${
+                    isUserError ? 'border-red-500' : 'border-[#1f1f23] focus:border-blue-500'
                   }`}
                 />
                 {isUserError && (
@@ -283,8 +301,8 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
                   onChange={(e) => setPassword(e.target.value)}
                   onBlur={() => setTouched((p) => ({ ...p, password: true }))}
                   placeholder="••••••••••••••••"
-                  className={`w-full bg-[#272b34] text-zinc-100 font-mono text-sm px-4 py-3 rounded-lg border focus:outline-none transition ${
-                    isPassError ? 'border-red-500' : 'border-[#3b414f] focus:border-orange-500'
+                  className={`w-full bg-[#09090b] text-zinc-100 font-mono text-xs px-4 py-2.5 rounded-xl border focus:outline-none transition ${
+                    isPassError ? 'border-red-500' : 'border-[#1f1f23] focus:border-blue-500'
                   }`}
                 />
                 {isPassError && (
@@ -302,13 +320,13 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
                   value={baseDirectory}
                   onChange={(e) => setBaseDirectory(e.target.value)}
                   placeholder="/"
-                  className="w-full bg-[#272b34] text-zinc-100 font-mono text-sm px-4 py-3 rounded-lg border border-[#3b414f] focus:outline-none focus:border-orange-500"
+                  className="w-full bg-[#09090b] text-zinc-100 font-mono text-xs px-4 py-2.5 rounded-xl border border-[#1f1f23] focus:outline-none focus:border-blue-500"
                 />
               </div>
             </div>
           </div>
 
-          {/* DELETE FILES Toggle Row matching screenshot */}
+          {/* DELETE FILES Toggle Row */}
           <div className="pt-2 flex items-start gap-3">
             <button
               type="button"
@@ -316,7 +334,7 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
               aria-checked={deleteFiles}
               onClick={() => setDeleteFiles(!deleteFiles)}
               className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                deleteFiles ? 'bg-[#ea580c]' : 'bg-[#272b34]'
+                deleteFiles ? 'bg-blue-600' : 'bg-[#1f1f23]'
               }`}
             >
               <span
@@ -336,11 +354,11 @@ export const ServerImport: React.FC<ServerImportProps> = ({ server, onNavigate }
           </div>
 
           {/* Bottom Right Submit Button */}
-          <div className="flex justify-end pt-4 border-t border-[#272b34]">
+          <div className="flex justify-end pt-4 border-t border-[#1f1f23]">
             <button
               type="submit"
               disabled={isSubmitting}
-              className="flex items-center gap-2 px-6 py-2.5 bg-[#ea580c] hover:bg-[#c2410c] text-white rounded font-bold uppercase text-xs tracking-wider transition shadow-lg cursor-pointer disabled:opacity-50"
+              className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold uppercase text-xs tracking-wider transition shadow-md shadow-blue-600/20 cursor-pointer disabled:opacity-50"
             >
               {isSubmitting ? (
                 <>

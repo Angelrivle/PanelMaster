@@ -13,14 +13,22 @@ export class SFTPService {
   private getOrCreateHostKey(): string {
     try {
       if (fs.existsSync(this.hostKeyPath)) {
-        return fs.readFileSync(this.hostKeyPath, 'utf8');
+        const existing = fs.readFileSync(this.hostKeyPath, 'utf8');
+        // ssh2 Server strictly requires PKCS#1 ("BEGIN RSA PRIVATE KEY")
+        if (existing.includes('BEGIN RSA PRIVATE KEY')) {
+          return existing;
+        }
+        // If old key was PKCS#8 or malformed, remove it to regenerate
+        try {
+          fs.unlinkSync(this.hostKeyPath);
+        } catch {}
       }
     } catch {}
 
     const { privateKey } = crypto.generateKeyPairSync('rsa', {
       modulusLength: 2048,
-      publicKeyEncoding: { type: 'spki', format: 'pem' },
-      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
     });
 
     try {
@@ -89,19 +97,28 @@ export class SFTPService {
                 // If specific service identifier given, verify service
                 let service = null;
                 if (serviceIdentifier) {
+                  const cleanIdentifier = serviceIdentifier.replace(/^srv-/, '');
                   service = await prisma.service.findFirst({
                     where: {
-                      OR: [
-                        { id: serviceIdentifier },
-                        { id: { startsWith: serviceIdentifier } },
-                        { slug: serviceIdentifier },
-                        { slug: { startsWith: serviceIdentifier } },
-                        { name: serviceIdentifier },
+                      AND: [
+                        user.isSuperAdmin ? {} : { ownerId: user.id },
+                        {
+                          OR: [
+                            { id: serviceIdentifier },
+                            { id: `srv-${serviceIdentifier}` },
+                            { id: cleanIdentifier },
+                            { id: { startsWith: cleanIdentifier } },
+                            { id: { contains: cleanIdentifier } },
+                            { slug: serviceIdentifier },
+                            { slug: { contains: cleanIdentifier } },
+                            { name: serviceIdentifier },
+                          ],
+                        },
                       ],
                     },
                   });
                 } else {
-                  // Default to first service
+                  // Default to first service owned by user
                   service = await prisma.service.findFirst({
                     where: user.isSuperAdmin ? {} : { ownerId: user.id },
                     orderBy: { createdAt: 'desc' },

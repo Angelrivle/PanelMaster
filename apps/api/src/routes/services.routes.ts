@@ -3,6 +3,7 @@ import { z } from 'zod';
 import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { exec } from 'child_process';
 import util from 'util';
 import { prisma } from '../prisma';
@@ -718,7 +719,8 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     });
 
     const body = createSchema.parse(request.body);
-    const serviceId = body.id || `srv-${Date.now()}`;
+    const randHex = crypto.randomBytes(4).toString('hex');
+    const serviceId = body.id || `srv-${randHex}`;
     const slug = body.name.toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + Math.floor(Math.random() * 1000);
 
     // Ensure template & templateVersion exist in DB

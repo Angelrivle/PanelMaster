@@ -60,7 +60,7 @@ export const ServerVersions: React.FC<ServerVersionsProps> = ({ server, onUpdate
   const [selectedSoftware, setSelectedSoftware] = useState<SoftwareCard | null>(null);
   const [browseSearch, setBrowseSearch] = useState('');
   const [selectedChannel, setSelectedChannel] = useState<'all' | 'stable' | 'experimental'>('all');
-  const [selectedJava, setSelectedJava] = useState<'all' | '21' | '17' | '8'>('all');
+  const [selectedJava, setSelectedJava] = useState<string>('all');
   const [fetchedBuilds, setFetchedBuilds] = useState<BuildVersion[]>([]);
   const [isLoadingBuilds, setIsLoadingBuilds] = useState(false);
 
@@ -695,9 +695,14 @@ export const ServerVersions: React.FC<ServerVersionsProps> = ({ server, onUpdate
                   className="w-full bg-[#111114] border border-[#1f1f23] rounded-xl px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-blue-500 font-mono transition"
                 >
                   <option value="all">Todas las versiones de Java</option>
-                  <option value="21">Requiere Java 21</option>
-                  <option value="17">Requiere Java 17</option>
-                  <option value="8">Requiere Java 8</option>
+                  <option value="25">Requiere Java 25 (Early Access)</option>
+                  <option value="24">Requiere Java 24</option>
+                  <option value="23">Requiere Java 23</option>
+                  <option value="22">Requiere Java 22</option>
+                  <option value="21">Requiere Java 21 (1.20.5+)</option>
+                  <option value="17">Requiere Java 17 (1.18 - 1.20.4)</option>
+                  <option value="11">Requiere Java 11 (1.16.5)</option>
+                  <option value="8">Requiere Java 8 (1.8 - 1.12.2)</option>
                 </select>
               </div>
             </div>
@@ -799,6 +804,26 @@ export const ServerVersions: React.FC<ServerVersionsProps> = ({ server, onUpdate
             <p className="text-xs text-zinc-400 leading-relaxed">
               El instalador descargará el ejecutable .jar oficial directamente de la API de MCJars y actualizará la configuración de arranque.
             </p>
+
+            {/* Clean Install / Wipe Toggle */}
+            <label className="flex items-start gap-3 p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/30 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={installConfirm.cleanInstall}
+                onChange={(e) =>
+                  setInstallConfirm((prev) => ({ ...prev, cleanInstall: e.target.checked }))
+                }
+                className="mt-0.5 w-4 h-4 rounded border-amber-500/50 bg-[#09090b] text-amber-500 focus:ring-amber-500 cursor-pointer"
+              />
+              <div className="min-w-0 flex-1">
+                <span className="text-xs font-bold text-amber-300 block">
+                  Borrado general / Instalación limpia (Wipe completo)
+                </span>
+                <span className="text-[11px] text-zinc-400 block mt-0.5 leading-relaxed">
+                  Elimina mods, configuraciones y mundos antiguos antes de instalar para evitar incompatibilidades o errores al cambiar de versión.
+                </span>
+              </div>
+            </label>
 
             <div className="flex justify-end gap-2.5 pt-3 border-t border-[#1f1f23]">
               <button

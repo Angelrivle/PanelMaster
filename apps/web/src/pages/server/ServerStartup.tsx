@@ -135,9 +135,17 @@ export const ServerStartup: React.FC<ServerStartupProps> = ({ server }) => {
           >
             {isMinecraft ? (
               <>
+                <option value="ghcr.io/panelmaster/images:java-25">Java 25 (Early-Access / Modern)</option>
+                <option value="ghcr.io/panelmaster/images:java-24">Java 24 (Modern)</option>
+                <option value="ghcr.io/panelmaster/images:java-23">Java 23 (Modern)</option>
+                <option value="ghcr.io/panelmaster/images:java-22">Java 22 (Modern)</option>
                 <option value="ghcr.io/panelmaster/images:java-21">Java 21 LTS (Minecraft 1.20.5 - 1.21.4+ / Moderno)</option>
+                <option value="ghcr.io/panelmaster/images:java-20">Java 20 (Modern)</option>
+                <option value="ghcr.io/panelmaster/images:java-19">Java 19</option>
+                <option value="ghcr.io/panelmaster/images:java-18">Java 18</option>
                 <option value="ghcr.io/panelmaster/images:java-17">Java 17 LTS (Minecraft 1.18.2 - 1.20.4)</option>
-                <option value="ghcr.io/panelmaster/images:java-11">Java 11 LTS (Minecraft 1.16.5 - 1.17.1)</option>
+                <option value="ghcr.io/panelmaster/images:java-16">Java 16 (Minecraft 1.17 - 1.17.1)</option>
+                <option value="ghcr.io/panelmaster/images:java-11">Java 11 LTS (Minecraft 1.16.5)</option>
                 <option value="ghcr.io/panelmaster/images:java-8">Java 8 (Minecraft 1.8.8 - 1.12.2 / Modpacks Clásicos)</option>
               </>
             ) : (

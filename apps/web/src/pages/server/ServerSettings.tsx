@@ -144,73 +144,74 @@ export const ServerSettings: React.FC<ServerSettingsProps> = ({
             } catch {}
           }
         }
-        const shortId = server?.id ? (server.id.length > 8 ? server.id.slice(0, 8) : server.id) : '7083669c';
+        const rawId = (server?.id || '').replace(/^srv-/, '');
+        const shortId = rawId.length >= 8 ? rawId.slice(0, 8) : (rawId || '7083669c');
         const username = `${loggedUser}.${shortId}`;
         const serverAddress = `sftp://${host}:2022`;
 
         return (
-          <div className="w-full bg-[#181a20] border border-[#2b303c] rounded-xl overflow-hidden shadow-lg space-y-0">
-            {/* Orange Header like Bloom / Pterodactyl */}
-            <div className="bg-[#ea580c] text-white px-5 py-3.5 flex items-center justify-between font-bold tracking-wider text-sm uppercase">
+          <div className="w-full bg-[#111114] border border-[#1f1f23] rounded-2xl overflow-hidden shadow-sm space-y-0">
+            {/* Header matched to panel dark theme */}
+            <div className="bg-[#18181c] border-b border-[#1f1f23] text-zinc-100 px-5 py-3.5 flex items-center justify-between font-bold text-sm">
               <div className="flex items-center gap-2">
-                <Key className="w-4 h-4 text-white" />
-                <span>SFTP DETAILS</span>
+                <Key className="w-4 h-4 text-blue-400" />
+                <span className="tracking-wide">Detalles de Conexión SFTP</span>
               </div>
-              <span className="text-xs bg-black/25 px-2.5 py-0.5 rounded font-mono font-medium tracking-normal">PUERTO: 2022</span>
+              <span className="text-[11px] bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2.5 py-0.5 rounded-full font-mono font-medium">PUERTO: 2022</span>
             </div>
 
             <div className="p-5 space-y-4">
               <div>
-                <label className="text-[11px] font-mono font-bold tracking-wider text-zinc-300 uppercase block mb-1.5">
-                  SERVER ADDRESS
+                <label className="text-[11px] font-mono font-bold tracking-wider text-zinc-400 uppercase block mb-1.5">
+                  DIRECCIÓN DEL SERVIDOR (HOST)
                 </label>
                 <div className="relative flex items-center">
                   <input
                     type="text"
                     readOnly
                     value={serverAddress}
-                    className="w-full bg-[#272b34] text-zinc-100 font-mono text-sm px-4 py-3 rounded-lg border border-[#3b414f] focus:outline-none select-all font-medium pr-28"
+                    className="w-full bg-[#09090b] text-zinc-100 font-mono text-xs px-4 py-2.5 rounded-xl border border-[#1f1f23] focus:outline-none focus:border-blue-500 select-all font-medium pr-28"
                   />
                   <button
                     type="button"
                     onClick={() => copy(serverAddress, 'sftp-host')}
-                    className="absolute right-2 px-3 py-1.5 bg-[#1b1e24] hover:bg-[#323846] text-zinc-200 text-xs font-semibold rounded-md border border-[#444b5c] transition flex items-center gap-1.5 cursor-pointer"
+                    className="absolute right-2 px-3 py-1 bg-[#18181c] hover:bg-[#222227] text-zinc-200 text-xs font-semibold rounded-lg border border-[#27272a] transition flex items-center gap-1.5 cursor-pointer"
                   >
-                    {copiedKey === 'sftp-host' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedKey === 'sftp-host' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-400" />}
                     {copiedKey === 'sftp-host' ? 'Copiado' : 'Copiar'}
                   </button>
                 </div>
               </div>
 
               <div>
-                <label className="text-[11px] font-mono font-bold tracking-wider text-zinc-300 uppercase block mb-1.5">
-                  USERNAME
+                <label className="text-[11px] font-mono font-bold tracking-wider text-zinc-400 uppercase block mb-1.5">
+                  USUARIO SFTP (USERNAME)
                 </label>
                 <div className="relative flex items-center">
                   <input
                     type="text"
                     readOnly
                     value={username}
-                    className="w-full bg-[#272b34] text-zinc-100 font-mono text-sm px-4 py-3 rounded-lg border border-[#3b414f] focus:outline-none select-all font-medium pr-28"
+                    className="w-full bg-[#09090b] text-zinc-100 font-mono text-xs px-4 py-2.5 rounded-xl border border-[#1f1f23] focus:outline-none focus:border-blue-500 select-all font-medium pr-28"
                   />
                   <button
                     type="button"
                     onClick={() => copy(username, 'sftp-user')}
-                    className="absolute right-2 px-3 py-1.5 bg-[#1b1e24] hover:bg-[#323846] text-zinc-200 text-xs font-semibold rounded-md border border-[#444b5c] transition flex items-center gap-1.5 cursor-pointer"
+                    className="absolute right-2 px-3 py-1 bg-[#18181c] hover:bg-[#222227] text-zinc-200 text-xs font-semibold rounded-lg border border-[#27272a] transition flex items-center gap-1.5 cursor-pointer"
                   >
-                    {copiedKey === 'sftp-user' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedKey === 'sftp-user' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-400" />}
                     {copiedKey === 'sftp-user' ? 'Copiado' : 'Copiar'}
                   </button>
                 </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 text-xs text-zinc-400 border-t border-[#272b34]">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 text-xs text-zinc-400 border-t border-[#1f1f23]">
                 <p>
                   Contraseña: <span className="text-zinc-200 font-medium">Usa la contraseña de tu cuenta de PanelMaster</span>
                 </p>
                 <a
                   href={serverAddress}
-                  className="inline-flex items-center gap-1.5 text-orange-400 hover:text-orange-300 font-semibold"
+                  className="inline-flex items-center gap-1.5 text-blue-400 hover:text-blue-300 font-semibold"
                 >
                   <Key className="w-3.5 h-3.5" />
                   Conectar con FileZilla / WinSCP
