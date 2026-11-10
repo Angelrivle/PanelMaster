@@ -225,6 +225,7 @@ if command -v ufw &> /dev/null; then
   ufw allow 80/tcp >/dev/null 2>&1 || true
   ufw allow "${WEB_PORT}"/tcp >/dev/null 2>&1 || true
   ufw allow 443/tcp >/dev/null 2>&1 || true
+  ufw allow 2022/tcp >/dev/null 2>&1 || true
   ufw allow 3000/tcp >/dev/null 2>&1 || true
   ufw allow 5173/tcp >/dev/null 2>&1 || true
   ufw allow 25565/tcp >/dev/null 2>&1 || true
@@ -236,6 +237,7 @@ elif command -v firewall-cmd &> /dev/null; then
   firewall-cmd --permanent --add-port=80/tcp >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port="${WEB_PORT}"/tcp >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port=443/tcp >/dev/null 2>&1 || true
+  firewall-cmd --permanent --add-port=2022/tcp >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port=3000/tcp >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port=5173/tcp >/dev/null 2>&1 || true
   firewall-cmd --permanent --add-port=25565/tcp >/dev/null 2>&1 || true
