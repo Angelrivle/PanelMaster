@@ -178,6 +178,15 @@ export class DockerService {
     } catch {}
 
     return new Promise((resolve) => {
+      let done = false;
+      const timer = setTimeout(() => {
+        if (!done) {
+          done = true;
+          try { req.destroy(); } catch {}
+          resolve(false);
+        }
+      }, 60000);
+
       const req = http.request(
         {
           socketPath: this.socketPath,
@@ -186,10 +195,22 @@ export class DockerService {
         },
         (res) => {
           res.on('data', () => {});
-          res.on('end', () => resolve(true));
+          res.on('end', () => {
+            if (!done) {
+              done = true;
+              clearTimeout(timer);
+              resolve(true);
+            }
+          });
         }
       );
-      req.on('error', () => resolve(false));
+      req.on('error', () => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          resolve(false);
+        }
+      });
       req.end();
     });
   }
@@ -239,9 +260,17 @@ export class DockerService {
         signal: AbortSignal.timeout(120000),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const buf = Buffer.from(await res.arrayBuffer());
-      fs.writeFileSync(jarPath, buf);
-      console.log(`[DockerService] Successfully saved server.jar (${(buf.length / (1024 * 1024)).toFixed(1)} MB)`);
+      if (!res.body) throw new Error('Empty response body');
+
+      const fileStream = fs.createWriteStream(jarPath);
+      const reader = (res.body as any).getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fileStream.write(Buffer.from(value));
+      }
+      fileStream.end();
+      console.log(`[DockerService] Successfully saved server.jar`);
       return true;
     } catch (err: any) {
       console.error(`[DockerService] Error downloading server jar: ${err.message}`);
@@ -322,28 +351,7 @@ export class DockerService {
     const hostDataPath = `/var/lib/panelmaster/volumes/${serviceId}`;
     const prevConfig = this.getServerConfig(serviceId);
 
-    // If jarUrl is provided, download it directly to server.jar
-    if (options.jarUrl) {
-      await this.downloadServerJar(serviceId, options.jarUrl);
-    } else {
-      try {
-        const rawFork = (options.fork || 'paper').trim().toLowerCase();
-        const res = await fetch(`https://mcjars.app/api/v2/builds/${rawFork}`, {
-          headers: { 'User-Agent': 'PanelMaster/1.0' },
-          signal: AbortSignal.timeout(15000),
-        });
-        if (res.ok) {
-          const data: any = await res.json();
-          const buildInfo = data?.builds?.[options.version];
-          const jarUrl = buildInfo?.latest?.jarUrl;
-          if (jarUrl) {
-            await this.downloadServerJar(serviceId, jarUrl);
-          }
-        }
-      } catch {}
-    }
-
-    // Normalize fork name to itzg TYPE
+    // Normalize fork name
     const rawFork = (options.fork || 'paper').trim().toLowerCase();
     let type = 'PAPER';
     if (rawFork.includes('purpur')) type = 'PURPUR';
@@ -367,7 +375,7 @@ export class DockerService {
     const newMinorMatch = (options.version || '').match(/^1\.(\d+)/);
     const isDowngrade = prevMinorMatch && newMinorMatch && parseInt(newMinorMatch[1], 10) < parseInt(prevMinorMatch[1], 10);
 
-    // If clean install, downgrade, or switching away from a modpack, wipe mods and incompatible configs
+    // 1. Wipe old files FIRST if clean install or downgrade (BEFORE downloading new jar!)
     if (options.cleanInstall || isDowngrade || prevConfig.modPlatform) {
       try {
         const modsPath = path.join(hostDataPath, 'mods');
@@ -407,21 +415,12 @@ export class DockerService {
             }
           }
 
-          // Backup or reset world directories on downgrade or cleanInstall to prevent NBT chunk load crashes
+          // Reset world directories on cleanInstall or downgrade
           if (options.cleanInstall || isDowngrade) {
             for (const worldDir of ['world', 'world_nether', 'world_the_end']) {
               const targetDir = path.join(hostDataPath, worldDir);
               if (fs.existsSync(targetDir)) {
-                if (options.cleanInstall) {
-                  fs.rmSync(targetDir, { recursive: true, force: true });
-                } else {
-                  const backupName = `${worldDir}_backup_${(prevConfig.version || 'old').replace(/\./g, '_')}_${Date.now()}`;
-                  try {
-                    fs.renameSync(targetDir, path.join(hostDataPath, backupName));
-                  } catch {
-                    fs.rmSync(targetDir, { recursive: true, force: true });
-                  }
-                }
+                fs.rmSync(targetDir, { recursive: true, force: true });
               }
             }
           }
@@ -429,6 +428,26 @@ export class DockerService {
       } catch (err: any) {
         console.error(`[DockerService] Notice during version files cleanup: ${err.message}`);
       }
+    }
+
+    // 2. Download the new jar AFTER wipe so it is NEVER deleted!
+    if (options.jarUrl) {
+      await this.downloadServerJar(serviceId, options.jarUrl);
+    } else {
+      try {
+        const res = await fetch(`https://mcjars.app/api/v2/builds/${rawFork}`, {
+          headers: { 'User-Agent': 'PanelMaster/1.0' },
+          signal: AbortSignal.timeout(15000),
+        });
+        if (res.ok) {
+          const data: any = await res.json();
+          const buildInfo = data?.builds?.[options.version];
+          const jarUrl = buildInfo?.latest?.jarUrl;
+          if (jarUrl) {
+            await this.downloadServerJar(serviceId, jarUrl);
+          }
+        }
+      } catch {}
     }
 
     // Determine target Java version
@@ -690,42 +709,22 @@ export class DockerService {
       }
     }
 
-    // Official Pterodactyl Java Yolks with Java 25 & fallback to Eclipse Temurin
-    let image = 'ghcr.io/pterodactyl/yolks:java_21';
-    let fallbackImage = 'eclipse-temurin:21-jdk';
-
+    // Select best available image:
+    // Using local cached image with custom Entrypoint ['sh', '-c'] completely bypasses
+    // itzg wrapper scripts and mc-image-helper, starting pure Java instantly with 0MB download overhead!
+    let image = 'itzg/minecraft-server:java21';
     if (javaVer >= 25) {
       image = 'ghcr.io/pterodactyl/yolks:java_25';
-      fallbackImage = 'eclipse-temurin:25-jdk';
     } else if (javaVer === 24) {
       image = 'ghcr.io/pterodactyl/yolks:java_24';
-      fallbackImage = 'eclipse-temurin:24-jdk';
-    } else if (javaVer === 23) {
-      image = 'ghcr.io/pterodactyl/yolks:java_23';
-      fallbackImage = 'eclipse-temurin:23-jdk';
-    } else if (javaVer === 22) {
-      image = 'ghcr.io/pterodactyl/yolks:java_22';
-      fallbackImage = 'eclipse-temurin:22-jdk';
-    } else if (javaVer === 21) {
-      image = 'ghcr.io/pterodactyl/yolks:java_21';
-      fallbackImage = 'eclipse-temurin:21-jdk';
     } else if (javaVer === 17 || javaVer === 16) {
-      image = 'ghcr.io/pterodactyl/yolks:java_17';
-      fallbackImage = 'eclipse-temurin:17-jdk';
-    } else if (javaVer === 11) {
-      image = 'ghcr.io/pterodactyl/yolks:java_11';
-      fallbackImage = 'eclipse-temurin:11-jdk';
-    } else if (javaVer === 8) {
-      image = 'ghcr.io/pterodactyl/yolks:java_8';
-      fallbackImage = 'eclipse-temurin:8-jdk';
+      image = 'itzg/minecraft-server:java17';
+    } else if (javaVer <= 8) {
+      image = 'itzg/minecraft-server:java8';
     }
 
-    // Pull image in background if needed
-    const pulled = await this.ensureImage(image);
-    if (!pulled) {
-      await this.ensureImage(fallbackImage);
-      image = fallbackImage;
-    }
+    // Pull image with safety timeout if not present
+    await this.ensureImage(image);
 
     // Balanced JVM memory (70% heap, remaining 30% for JVM Metaspace/Native Netty)
     const jvmHeapMb = Math.max(512, Math.floor(memoryMb * 0.70));
@@ -751,8 +750,9 @@ export class DockerService {
 
     const createPayload: any = {
       Image: image,
+      Entrypoint: ['sh', '-c'], // Strictly overrides default entrypoint so /image/scripts/start never runs!
       WorkingDir: '/data',
-      Cmd: ['sh', '-c', startupScript],
+      Cmd: [startupScript],
       Env: [
         `SERVER_PORT=${port}`,
         `SERVER_MEMORY=${memoryMb}`,
