@@ -720,7 +720,7 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     });
 
     const body = createSchema.parse(request.body);
-    const randHex = crypto.randomBytes(4).toString('hex');
+    const randHex = crypto.randomBytes(6).toString('hex');
     const serviceId = body.id || `srv-${randHex}`;
     const slug = body.name.toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + Math.floor(Math.random() * 1000);
 
@@ -913,16 +913,11 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     } else if (action === 'KILL') {
       if (container) await dockerService.killContainer(container.Id);
     } else if (action === 'START' || action === 'RESTART') {
-      if (container && container.State !== 'running') {
-        const started = await dockerService.startContainer(container.Id);
-        if (!started) {
-          await dockerService.createServiceContainer({
-            serviceId: id,
-            name: id,
-            startNow: true,
-          });
-        }
+      // If container is already running and action is START, don't recreate
+      if (container && container.State === 'running' && action === 'START') {
+        // already running
       } else {
+        // Always recreate clean container with updated configuration (Java version, JVM RAM, pure yolk architecture)
         await dockerService.createServiceContainer({
           serviceId: id,
           name: id,
@@ -1065,21 +1060,17 @@ export async function servicesRoutes(fastify: FastifyInstance) {
           await prisma.service.updateMany({ where: { id }, data: { status: 'RUNNING' } });
           await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'RUNNING' } });
 
-          // Fast-start existing stopped container if possible
+          // If already running and action is START, simply attach logs
           let cur = await dockerService.findContainerByName(containerName);
-          if (cur && cur.State !== 'running') {
-            const started = await dockerService.startContainer(cur.Id);
-            if (started) {
-              attachLogs(cur.Id);
-              return;
-            }
+          if (cur && cur.State === 'running' && act === 'START') {
+            attachLogs(cur.Id);
+            return;
           }
 
-          // Otherwise recreate/create container with latest settings
+          // Otherwise recreate/create container with latest settings (Pterodactyl pure architecture)
           const container = await dockerService.createServiceContainer({
             serviceId: id,
             name: srvName,
-            port: 25565,
             startNow: true,
           });
 

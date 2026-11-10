@@ -80,12 +80,8 @@ export const ServerFiles: React.FC<ServerFilesProps> = ({ server, language = 'en
   const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // File tree state
-  const [fileSystem, setFileSystem] = useState<FileNode[]>([
-    { name: 'server.properties', path: '/server.properties', isDir: false, size: 1420, parentDir: '' },
-    { name: 'plugins', path: '/plugins', isDir: true, parentDir: '' },
-    { name: 'config', path: '/config', isDir: true, parentDir: '' },
-  ]);
+  // File tree state (starts empty and syncs with live server files)
+  const [fileSystem, setFileSystem] = useState<FileNode[]>([]);
 
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = useState(false);

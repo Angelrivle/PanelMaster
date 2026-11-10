@@ -145,7 +145,7 @@ export const ServerSettings: React.FC<ServerSettingsProps> = ({
           }
         }
         const rawId = (server?.id || '').replace(/^srv-/, '');
-        const shortId = rawId.length >= 8 ? rawId.slice(0, 8) : (rawId || '7083669c');
+        const shortId = rawId.length > 12 ? rawId.slice(0, 12) : rawId;
         const username = `${loggedUser}.${shortId}`;
         const serverAddress = `sftp://${host}:2022`;
 
