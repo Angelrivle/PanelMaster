@@ -62,26 +62,26 @@ echo -e "${YELLOW}${BOLD}--- CONFIGURACIÓN INICIAL DEL PANEL ---${NC}"
 # Detect server public IP
 PUBLIC_IP=$(curl -s4 https://api.ipify.org || curl -s4 https://icanhazip.com || echo "127.0.0.1")
 
-read -rp "$(echo -e "${CYAN}Ingresa el dominio o FQDN del panel [deja vacío para usar IP ${PUBLIC_IP}]: ${NC}")" PANEL_DOMAIN
+read -rp "$(echo -e "${CYAN}Ingresa el dominio o FQDN del panel [deja vacío para usar IP ${PUBLIC_IP}]: ${NC}")" PANEL_DOMAIN </dev/tty || PANEL_DOMAIN="${PUBLIC_IP}"
 if [ -z "$PANEL_DOMAIN" ]; then
   PANEL_DOMAIN="${PUBLIC_IP}"
   ENABLE_SSL="n"
 else
-  read -rp "$(echo -e "${CYAN}¿Deseas configurar SSL / HTTPS automático con Let's Encrypt? [S/n]: ${NC}")" ENABLE_SSL
+  read -rp "$(echo -e "${CYAN}¿Deseas configurar SSL / HTTPS automático con Let's Encrypt? [S/n]: ${NC}")" ENABLE_SSL </dev/tty || ENABLE_SSL="s"
   ENABLE_SSL=${ENABLE_SSL:-s}
 fi
 
-read -rp "$(echo -e "${CYAN}Correo del Administrador Inicial [admin@panelmaster.dev]: ${NC}")" ADMIN_EMAIL
+read -rp "$(echo -e "${CYAN}Correo del Administrador Inicial [admin@panelmaster.dev]: ${NC}")" ADMIN_EMAIL </dev/tty || ADMIN_EMAIL="admin@panelmaster.dev"
 ADMIN_EMAIL=${ADMIN_EMAIL:-admin@panelmaster.dev}
 
-read -rsp "$(echo -e "${CYAN}Contraseña para el Administrador Inicial [deja vacío para autogenerar]: ${NC}")" ADMIN_PASSWORD
+read -rsp "$(echo -e "${CYAN}Contraseña para el Administrador Inicial [deja vacío para autogenerar]: ${NC}")" ADMIN_PASSWORD </dev/tty || ADMIN_PASSWORD=""
 echo ""
 if [ -z "$ADMIN_PASSWORD" ]; then
   ADMIN_PASSWORD=$(openssl rand -base64 12)
   echo -e "${YELLOW}[!] Contraseña autogenerada: ${BOLD}${ADMIN_PASSWORD}${NC}"
 fi
 
-read -rp "$(echo -e "${CYAN}Puerto HTTP del Panel Web [80]: ${NC}")" WEB_PORT
+read -rp "$(echo -e "${CYAN}Puerto HTTP del Panel Web [80]: ${NC}")" WEB_PORT </dev/tty || WEB_PORT="80"
 WEB_PORT=${WEB_PORT:-80}
 
 INSTALL_DIR="/var/www/panelmaster"
