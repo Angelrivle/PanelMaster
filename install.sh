@@ -140,6 +140,42 @@ if ! docker compose version &> /dev/null; then
   ln -sf "${DOCKER_CLI_DIR}/docker-compose" /usr/local/bin/docker-compose || true
 fi
 
+# Host Swap Protection (prevents OOM stalls and SSH drops during builds/pulls)
+SWAP_MB=$(free -m | awk '/^Swap:/ {print $2}')
+if [ "${SWAP_MB:-0}" -eq 0 ] && [ ! -f /swapfile ]; then
+  echo -e "${YELLOW}[*] Configurando archivo Swap de 2GB para proteger la estabilidad del VPS...${NC}"
+  (fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none)
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
+  swapon /swapfile
+  if ! grep -q '^/swapfile ' /etc/fstab; then
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  fi
+  sysctl -w vm.swappiness=10 >/dev/null 2>&1 || true
+  if ! grep -q '^vm.swappiness' /etc/sysctl.conf; then
+    echo 'vm.swappiness=10' >> /etc/sysctl.conf
+  fi
+  echo -e "${GREEN}[✓] Swap de 2GB activado.${NC}"
+fi
+
+# Docker Daemon I/O Throttling (prevents concurrent layer pulls from starving SSH/disk)
+mkdir -p /etc/docker
+if [ ! -f /etc/docker/daemon.json ] || ! grep -q 'max-concurrent-downloads' /etc/docker/daemon.json 2>/dev/null; then
+  echo -e "${YELLOW}[*] Aplicando límites de I/O al daemon de Docker (max-concurrent-downloads=1)...${NC}"
+  cat > /etc/docker/daemon.json << 'EOF'
+{
+  "max-concurrent-downloads": 1,
+  "max-concurrent-uploads": 1,
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+EOF
+  systemctl reload docker >/dev/null 2>&1 || systemctl restart docker >/dev/null 2>&1 || true
+fi
+
 # 6. Cloning/Preparing Files
 echo -e "${CYAN}[3/6] Desplegando archivos de PanelMaster en ${INSTALL_DIR}...${NC}"
 
@@ -252,8 +288,8 @@ echo -e "${CYAN}[6/6] Compilando e iniciando microservicios con Docker Compose..
 cd "${INSTALL_DIR}"
 
 docker compose down --remove-orphans >/dev/null 2>&1 || docker-compose down --remove-orphans >/dev/null 2>&1 || true
-COMPOSE_PARALLEL_LIMIT=1 docker compose build api || COMPOSE_PARALLEL_LIMIT=1 docker-compose build api
-COMPOSE_PARALLEL_LIMIT=1 docker compose build web || COMPOSE_PARALLEL_LIMIT=1 docker-compose build web
+nice -n 15 ionice -c 2 -n 7 env COMPOSE_PARALLEL_LIMIT=1 docker compose build api || nice -n 15 ionice -c 2 -n 7 env COMPOSE_PARALLEL_LIMIT=1 docker-compose build api
+nice -n 15 ionice -c 2 -n 7 env COMPOSE_PARALLEL_LIMIT=1 docker compose build web || nice -n 15 ionice -c 2 -n 7 env COMPOSE_PARALLEL_LIMIT=1 docker-compose build web
 docker compose up -d || docker-compose up -d
 
 echo -e "${YELLOW}[*] Esperando inicialización de PostgreSQL y servicios...${NC}"
@@ -300,6 +336,7 @@ echo -e "  Directorio:    ${CYAN}${INSTALL_DIR}${NC}"
 echo -e "  Ver logs:      ${CYAN}cd ${INSTALL_DIR} && docker compose logs -f${NC}"
 echo -e "  Reiniciar:     ${CYAN}cd ${INSTALL_DIR} && docker compose restart${NC}"
 echo -e "  Actualizar:    ${CYAN}cd ${INSTALL_DIR} && bash update.sh${NC}"
+echo -e "  Update global: ${CYAN}curl -sSL https://raw.githubusercontent.com/Angelrivle/PanelMaster/main/update.sh | sudo bash${NC}"
 echo -e "  Configurar SSL:${CYAN}cd ${INSTALL_DIR} && bash ssl.sh${NC}"
 echo ""
 echo -e "${GREEN}Guarda estas credenciales en un lugar seguro.${NC}"
