@@ -54,31 +54,49 @@ export const ServerSettings: React.FC<ServerSettingsProps> = ({
     setTimeout(() => setIsSaved(false), 2000);
   };
 
-  const handleReinstall = () => {
+  const handleReinstall = async () => {
+    if (!server?.id) return;
     setIsReinstalling(true);
-    setTimeout(() => {
-      setIsReinstalling(false);
+    try {
+      const token = localStorage.getItem('nexus_token');
+      const res = await fetch(`/api/v1/services/${server.id}/reinstall`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error('Error al reinstalar el servidor');
       setIsReinstallModalOpen(false);
       toast.success('¡Reinstalación completada con éxito!\nEl software del contenedor ha sido reinstalado manteniendo intactos tus mundos y archivos.');
-    }, 1500);
+    } catch (err: any) {
+      toast.error(err?.message || 'Error al reinstalar el servidor.');
+    } finally {
+      setIsReinstalling(false);
+    }
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (deleteConfirmText !== name) {
       toast.error('El nombre del servidor introducido no coincide.');
       return;
     }
     setIsDeleting(true);
-    setTimeout(() => {
-      setIsDeleting(false);
-      setIsDeleteModalOpen(false);
+    try {
       if (onDeleteServer) {
-        onDeleteServer(server?.id);
+        await onDeleteServer(server?.id);
       } else {
-        toast.info('Servidor eliminado de forma permanente.');
-        window.location.reload();
+        const token = localStorage.getItem('nexus_token');
+        await fetch(`/api/v1/services/${server?.id}`, {
+          method: 'DELETE',
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        window.location.href = '/';
       }
-    }, 1200);
+      setIsDeleteModalOpen(false);
+      toast.info('Servidor eliminado de forma permanente.');
+    } catch {
+      toast.error('No se pudo eliminar el servidor.');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   return (
@@ -144,9 +162,8 @@ export const ServerSettings: React.FC<ServerSettingsProps> = ({
             } catch {}
           }
         }
-        const rawId = (server?.id || '').replace(/^srv-/, '');
-        const shortId = rawId.length > 12 ? rawId.slice(0, 12) : rawId;
-        const username = `${loggedUser}.${shortId}`;
+        const fullId = server?.id || '';
+        const username = `${loggedUser}.${fullId}`;
         const serverAddress = `sftp://${host}:2022`;
 
         return (
@@ -257,7 +274,7 @@ export const ServerSettings: React.FC<ServerSettingsProps> = ({
 
           <div className="p-3.5 bg-[#09090b] border border-[#1f1f23] rounded-xl">
             <span className="text-zinc-500 block text-[10px] uppercase">Docker Container:</span>
-            <span className="text-zinc-300">panelmaster-{server?.id || 'local-demo'}</span>
+            <span className="text-zinc-300">nexus-{server?.id || 'local-demo'}</span>
           </div>
 
           <div className="p-3.5 bg-[#09090b] border border-[#1f1f23] rounded-xl">

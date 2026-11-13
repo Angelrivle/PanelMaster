@@ -459,8 +459,13 @@ export const CreateServiceModal: React.FC<CreateServiceModalProps> = ({
     setIsSubmitting(true);
 
     try {
-      const serverId = `srv-${Date.now()}`;
-      const newService = {
+      const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+      let randAlnum = '';
+      for (let i = 0; i < 12; i++) {
+        randAlnum += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      const serverId = `srv-${randAlnum}`;
+      const newService: any = {
         id: serverId,
         name: name.trim(),
         description: description.trim() || 'Servidor administrado en PanelMaster',
@@ -478,7 +483,7 @@ export const CreateServiceModal: React.FC<CreateServiceModalProps> = ({
             : selectedEgg.category === 'web'
             ? 'WEB_STATIC'
             : 'DATABASE',
-        status: startOnCompletion ? 'RUNNING' : 'STOPPED',
+        status: startOnCompletion ? 'INSTALLING' : 'STOPPED',
         node: selectedNode,
         ip: window.location.hostname || 'panel.zenforge.online',
         port: primaryPort,
@@ -486,7 +491,7 @@ export const CreateServiceModal: React.FC<CreateServiceModalProps> = ({
         maxRamMb: memoryMb,
         ramMb: Math.round(memoryMb * 0.35),
         ram: `${((memoryMb * 0.35) / 1024).toFixed(1)} / ${(memoryMb / 1024).toFixed(0)} GB`,
-        cpuUsage: 1.8,
+        cpuUsage: 0,
         cpu: `${cpuLimit}%`,
         cpuLimit: cpuLimit,
         cpuPinning: cpuPinning,
@@ -505,6 +510,40 @@ export const CreateServiceModal: React.FC<CreateServiceModalProps> = ({
         createdAt: new Date().toISOString(),
       };
 
+      // Registrar servidor en backend / base de datos
+      const token = localStorage.getItem('nexus_token');
+      const res = await fetch('/api/v1/services', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          id: serverId,
+          name: name.trim(),
+          egg: selectedEgg.name,
+          category: selectedEgg.category,
+          dockerImage: dockerImage,
+          startupCommand: selectedEgg.startup,
+          memoryMb: memoryMb,
+          cpuCores: cpuLimit / 100,
+          diskMb: diskMb,
+          port: primaryPort,
+          environment: eggVariables,
+          startOnCompletion: startOnCompletion,
+        }),
+      });
+
+      if (res.ok) {
+        const createdData = await res.json();
+        if (createdData?.id) {
+          newService.id = createdData.id;
+        }
+        if (createdData?.status) {
+          newService.status = createdData.status;
+        }
+      }
+
       // Disparar plantilla oficial: server_installed si está marcado para inicio
       if (startOnCompletion) {
         fetch('/api/v1/mail/send-template', {
@@ -518,38 +557,10 @@ export const CreateServiceModal: React.FC<CreateServiceModalProps> = ({
               server: name.trim(),
               ip: window.location.hostname || 'panel.zenforge.online',
               port: String(primaryPort),
-              serverUrl: `http://localhost:5173/server/${serverId}/console`,
+              serverUrl: `${window.location.origin}/server/${newService.id}/console`,
             },
           }),
         }).catch(() => {});
-      }
-
-      // Registrar servidor en backend / base de datos
-      try {
-        const token = localStorage.getItem('nexus_token');
-        await fetch('/api/v1/services', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({
-            id: serverId,
-            name: name.trim(),
-            egg: selectedEgg.name,
-            category: selectedEgg.category,
-            dockerImage: dockerImage,
-            startupCommand: selectedEgg.startup,
-            memoryMb: memoryMb,
-            cpuCores: cpuLimit / 100,
-            diskMb: diskMb,
-            port: primaryPort,
-            environment: eggVariables,
-            startOnCompletion: startOnCompletion,
-          }),
-        });
-      } catch (backendErr) {
-        console.warn('Backend server registration notice:', backendErr);
       }
 
       onCreated(newService);

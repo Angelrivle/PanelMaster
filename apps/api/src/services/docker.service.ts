@@ -50,6 +50,37 @@ export class DockerService {
   private prevNetworkTx = 0;
   private prevNetworkTime = Date.now();
   private eventListeners: Array<(event: { serviceId: string; status: 'RUNNING' | 'STOPPED' | 'OOM' }) => void> = [];
+  private provisioningLocks = new Map<string, Promise<any>>();
+  private statsCache = new Map<string, { timestamp: number; data: ContainerStatsResult }>();
+  private serviceLogListeners = new Map<string, Set<(msg: string) => void>>();
+
+  onServiceLog(serviceId: string, cb: (msg: string) => void): () => void {
+    let set = this.serviceLogListeners.get(serviceId);
+    if (!set) {
+      set = new Set();
+      this.serviceLogListeners.set(serviceId, set);
+    }
+    set.add(cb);
+    return () => {
+      const current = this.serviceLogListeners.get(serviceId);
+      if (current) {
+        current.delete(cb);
+        if (current.size === 0) {
+          this.serviceLogListeners.delete(serviceId);
+        }
+      }
+    };
+  }
+
+  emitServiceLog(serviceId: string, msg: string): void {
+    const listeners = this.serviceLogListeners.get(serviceId);
+    if (!listeners || listeners.size === 0) return;
+    for (const cb of listeners) {
+      try {
+        cb(msg);
+      } catch {}
+    }
+  }
 
   onContainerEvent(cb: (event: { serviceId: string; status: 'RUNNING' | 'STOPPED' | 'OOM' }) => void) {
     this.eventListeners.push(cb);
@@ -170,22 +201,34 @@ export class DockerService {
     return list.find((c) => c.Names?.some((n: string) => n === `/${name}` || n.includes(name))) || null;
   }
 
-  async ensureImage(image: string): Promise<boolean> {
+  async ensureImage(image: string, serviceId?: string): Promise<boolean> {
     if (!this.isAvailable()) return false;
     try {
       const inspect = await this.request(`/images/${encodeURIComponent(image)}/json`);
       if (inspect && inspect.Id) return true;
     } catch {}
 
+    if (serviceId) {
+      this.emitServiceLog(
+        serviceId,
+        `\x1b[36m[PanelMaster Daemon]\x1b[0m Descargando imagen de entorno Docker (\x1b[1m${image}\x1b[0m)...\r\n`
+      );
+    }
+
     return new Promise((resolve) => {
       let done = false;
+      let lastEmit = 0;
+      let buffer = '';
       const timer = setTimeout(() => {
         if (!done) {
           done = true;
           try { req.destroy(); } catch {}
+          if (serviceId) {
+            this.emitServiceLog(serviceId, `\x1b[31m[PanelMaster Daemon]\x1b[0m Tiempo de espera agotado descargando ${image}.\r\n`);
+          }
           resolve(false);
         }
-      }, 60000);
+      }, 300000);
 
       const req = http.request(
         {
@@ -194,12 +237,51 @@ export class DockerService {
           method: 'POST',
         },
         (res) => {
-          res.on('data', () => {});
+          res.on('data', (chunk) => {
+            if (!serviceId) return;
+            buffer += chunk.toString('utf8');
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              try {
+                const ev = JSON.parse(line);
+                if (ev.error) {
+                  this.emitServiceLog(serviceId, `\x1b[31m[Docker Pull Error]\x1b[0m ${ev.error}\r\n`);
+                  continue;
+                }
+                const now = Date.now();
+                const status = ev.status || '';
+                const interesting =
+                  status === 'Pulling fs layer' ||
+                  status === 'Downloading' ||
+                  status === 'Extracting' ||
+                  status === 'Pull complete' ||
+                  status.startsWith('Status:');
+                if (interesting && now - lastEmit >= 2500) {
+                  lastEmit = now;
+                  const idPrefix = ev.id ? `${ev.id}: ` : '';
+                  const progressStr = ev.progress ? ` ${ev.progress}` : '';
+                  this.emitServiceLog(
+                    serviceId,
+                    `\x1b[90m[Docker Pull]\x1b[0m ${idPrefix}${status}${progressStr}\r\n`
+                  );
+                }
+              } catch {}
+            }
+          });
           res.on('end', () => {
             if (!done) {
               done = true;
               clearTimeout(timer);
-              resolve(true);
+              const ok = !res.statusCode || res.statusCode < 400;
+              if (serviceId && ok) {
+                this.emitServiceLog(
+                  serviceId,
+                  `\x1b[32m[PanelMaster Daemon]\x1b[0m Imagen Docker lista (\x1b[1m${image}\x1b[0m).\r\n`
+                );
+              }
+              resolve(ok);
             }
           });
         }
@@ -228,7 +310,7 @@ export class DockerService {
       version: '1.20.4',
       fork: 'Paper',
       build: 'Build #498',
-      java: 17,
+      java: 21,
       modPlatform: null,
       modpack: null,
       modpackTitle: null,
@@ -253,8 +335,13 @@ export class DockerService {
       fs.mkdirSync(hostDataPath, { recursive: true });
     }
     const jarPath = path.join(hostDataPath, 'server.jar');
+    const tmpPath = path.join(hostDataPath, 'server.jar.tmp');
     try {
       console.log(`[DockerService] Downloading server jar from: ${jarUrl}`);
+      this.emitServiceLog(
+        serviceId,
+        `\x1b[36m[PanelMaster Daemon]\x1b[0m Descargando server.jar desde repositorio oficial...\r\n`
+      );
       const res = await fetch(jarUrl, {
         headers: { 'User-Agent': 'PanelMaster/1.0 (https://panelmaster.dev)' },
         signal: AbortSignal.timeout(120000),
@@ -262,18 +349,51 @@ export class DockerService {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       if (!res.body) throw new Error('Empty response body');
 
-      const fileStream = fs.createWriteStream(jarPath);
+      const totalBytes = Number(res.headers.get('content-length') || 0);
+      let downloaded = 0;
+      let loggedMid = false;
+
+      const fileStream = fs.createWriteStream(tmpPath);
       const reader = (res.body as any).getReader();
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        fileStream.write(Buffer.from(value));
+        const buf = Buffer.from(value);
+        downloaded += buf.length;
+        if (!fileStream.write(buf)) {
+          await new Promise<void>((resolve) => fileStream.once('drain', resolve));
+        }
+        if (totalBytes > 0 && !loggedMid && downloaded >= totalBytes * 0.5) {
+          loggedMid = true;
+          const pct = Math.round((downloaded / totalBytes) * 100);
+          this.emitServiceLog(
+            serviceId,
+            `\x1b[90m[PanelMaster Daemon]\x1b[0m Descargando server.jar... ${pct}% (${(downloaded / (1024 * 1024)).toFixed(1)} MB)\r\n`
+          );
+        }
       }
-      fileStream.end();
+      await new Promise<void>((resolve, reject) => {
+        fileStream.on('finish', resolve);
+        fileStream.on('error', reject);
+        fileStream.end();
+      });
+
+      fs.renameSync(tmpPath, jarPath);
+      this.emitServiceLog(
+        serviceId,
+        `\x1b[32m[PanelMaster Daemon]\x1b[0m server.jar descargado (${(downloaded / (1024 * 1024)).toFixed(1)} MB).\r\n`
+      );
       console.log(`[DockerService] Successfully saved server.jar`);
       return true;
     } catch (err: any) {
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      } catch {}
       console.error(`[DockerService] Error downloading server jar: ${err.message}`);
+      this.emitServiceLog(
+        serviceId,
+        `\x1b[31m[PanelMaster Daemon]\x1b[0m Error descargando server.jar: ${err.message}\r\n`
+      );
       return false;
     }
   }
@@ -304,9 +424,10 @@ export class DockerService {
       );
     }
 
-    const jarPath = path.join(hostDataPath, 'server.jar');
+    const saved = this.getServerConfig(serviceId);
+    const jarName = saved.jarName || 'server.jar';
+    const jarPath = path.join(hostDataPath, jarName);
     if (fs.existsSync(jarPath) && fs.statSync(jarPath).size > 1000000) {
-      const saved = this.getServerConfig(serviceId);
       return { fork: saved.fork || 'Paper', version: saved.version || 'Latest', java: saved.java || 25 };
     }
 
@@ -325,7 +446,16 @@ export class DockerService {
           const jarUrl = info?.latest?.jarUrl;
           const javaReq = info?.java || 25;
           if (jarUrl) {
-            await this.downloadServerJar(serviceId, jarUrl);
+            const ok = await this.downloadServerJar(serviceId, jarUrl);
+            if (ok) {
+              this.saveServerConfig(serviceId, {
+                ...saved,
+                type: 'PAPER',
+                fork: 'Paper',
+                version: latestVer,
+                java: javaReq,
+              });
+            }
             return { fork: 'Paper', version: latestVer, java: javaReq };
           }
         }
@@ -579,6 +709,19 @@ export class DockerService {
       return { id: `mock-${options.serviceId}`, name: `nexus-${options.serviceId}` };
     }
 
+    const existingLock = this.provisioningLocks.get(options.serviceId);
+    if (existingLock) {
+      return existingLock;
+    }
+
+    const task = this._createServiceContainerInternal(options).finally(() => {
+      this.provisioningLocks.delete(options.serviceId);
+    });
+    this.provisioningLocks.set(options.serviceId, task);
+    return task;
+  }
+
+  private async _createServiceContainerInternal(options: CreateServiceContainerOptions): Promise<any> {
     const containerName = `nexus-${options.serviceId}`;
     const savedConfig = this.getServerConfig(options.serviceId);
     const hostDataPath = `/var/lib/panelmaster/volumes/${options.serviceId}`;
@@ -597,6 +740,12 @@ export class DockerService {
         await this.request(`/containers/${existing.Id}?force=true`, 'DELETE');
       }
     } catch {}
+
+    // Compute anti-crash cgroups hardware limits (Pterodactyl Wings standard)
+    const hostCores = Math.max(1, os.cpus().length);
+    const requestedCores = options.cpuCores || savedConfig.cpuCores || 2;
+    const effectiveCores = Math.min(Math.max(0.5, hostCores * 0.8), requestedCores);
+    const nanoCpus = Math.floor(effectiveCores * 1e9);
 
     // Determine if workload is Minecraft or Generic (Redis, Postgres, Nginx, Node, Python, etc.)
     const category = savedConfig.category || '';
@@ -624,7 +773,7 @@ export class DockerService {
       const genericMemoryMb = options.memoryMb || savedConfig.memoryMb || 512;
       const portKey = `${genericPort}/tcp`;
 
-      await this.ensureImage(genericImage);
+      await this.ensureImage(genericImage, options.serviceId);
 
       const envMap: Record<string, string> = {
         ...(savedConfig.environment || {}),
@@ -648,6 +797,11 @@ export class DockerService {
           Memory: genericMemoryMb * 1024 * 1024,
           MemoryReservation: Math.floor(genericMemoryMb * 0.75) * 1024 * 1024,
           MemorySwap: genericMemoryMb * 1024 * 1024,
+          NanoCpus: nanoCpus,
+          CpuShares: 512,
+          BlkioWeight: 300,
+          PidsLimit: 256,
+          OomKillDisable: false,
         },
         Tty: true,
         OpenStdin: true,
@@ -675,6 +829,7 @@ export class DockerService {
         }
       } catch (err: any) {
         console.error(`[DockerService] Error creating generic container: ${err.message}`);
+        this.emitServiceLog(options.serviceId, `\x1b[31m[PanelMaster Daemon]\x1b[0m Error creando contenedor: ${err.message}\r\n`);
       }
       return null;
     }
@@ -691,15 +846,18 @@ export class DockerService {
       await this.ensureLatestMinecraftJar(options.serviceId);
     }
 
+    // Re-read config after ensureLatestMinecraftJar in case Java/version was updated
+    const freshConfig = this.getServerConfig(options.serviceId);
+
     // Determine target Java version
-    let javaVer = savedConfig.java;
+    let javaVer = freshConfig.java;
     if (!javaVer) {
-      const match = (savedConfig.version || '').match(/^1\.(\d+)/);
+      const match = (freshConfig.version || '').match(/^1\.(\d+)/);
       if (match) {
         const minor = parseInt(match[1], 10);
         if (minor <= 16) javaVer = 8;
         else if (minor <= 20) {
-          javaVer = (savedConfig.version?.startsWith('1.20.5') || savedConfig.version?.startsWith('1.20.6')) ? 21 : 17;
+          javaVer = (freshConfig.version?.startsWith('1.20.5') || freshConfig.version?.startsWith('1.20.6')) ? 21 : 17;
         } else {
           javaVer = 21;
         }
@@ -709,32 +867,35 @@ export class DockerService {
       }
     }
 
-    // Select best available image:
-    // Using local cached image with custom Entrypoint ['sh', '-c'] completely bypasses
-    // itzg wrapper scripts and mc-image-helper, starting pure Java instantly with 0MB download overhead!
-    let image = 'itzg/minecraft-server:java21';
+    // Select lightweight official Pterodactyl Yolks image (5x smaller and faster than itzg)
+    let image = 'ghcr.io/pterodactyl/yolks:java_21';
     if (javaVer >= 25) {
       image = 'ghcr.io/pterodactyl/yolks:java_25';
     } else if (javaVer === 24) {
       image = 'ghcr.io/pterodactyl/yolks:java_24';
     } else if (javaVer === 17 || javaVer === 16) {
-      image = 'itzg/minecraft-server:java17';
+      image = 'ghcr.io/pterodactyl/yolks:java_17';
+    } else if (javaVer === 11) {
+      image = 'ghcr.io/pterodactyl/yolks:java_11';
     } else if (javaVer <= 8) {
-      image = 'itzg/minecraft-server:java8';
+      image = 'ghcr.io/pterodactyl/yolks:java_8';
     }
 
-    // Pull image with safety timeout if not present
-    await this.ensureImage(image);
+    // Pull image with live progress streaming to console if not cached
+    await this.ensureImage(image, options.serviceId);
 
     // Balanced JVM memory (70% heap, remaining 30% for JVM Metaspace/Native Netty)
     const jvmHeapMb = Math.max(512, Math.floor(memoryMb * 0.70));
     const portKey = `${port}/tcp`;
+    const configuredJar = (freshConfig.jarName || 'server.jar').replace(/[^a-zA-Z0-9._-]/g, '');
+    const customArgs =
+      (freshConfig.customArgs && String(freshConfig.customArgs).trim()) ||
+      '-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC';
 
-    // Host Config with Pterodactyl container lifecycle:
-    // Pure java execution without any itzg wrappers or mc-image-helper!
+    // Pure java execution inside lightweight yolk container
     const startupScript = [
       'if [ ! -f eula.txt ]; then echo "eula=true" > eula.txt; fi;',
-      'JAR_FILE="server.jar";',
+      `JAR_FILE="${configuredJar || 'server.jar'}";`,
       'if [ ! -f "$JAR_FILE" ]; then',
       '  FOUND_JAR=$(ls -1 *.jar 2>/dev/null | grep -v "installer" | head -n 1);',
       '  if [ -n "$FOUND_JAR" ] && [ -f "$FOUND_JAR" ]; then JAR_FILE="$FOUND_JAR"; fi;',
@@ -744,13 +905,18 @@ export class DockerService {
       '  echo "[PanelMaster] Por favor instala una version desde la seccion Versiones o sube un server.jar.";',
       '  exit 1;',
       'fi;',
-      'echo "[PanelMaster] Iniciando Minecraft con $JAR_FILE (Java heap: ' + jvmHeapMb + 'MB)...";',
-      `exec java -Xms128M -Xmx${jvmHeapMb}M -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -Dterminal.jline=false -Dterminal.ansi=true -jar "$JAR_FILE" nogui`
+      'echo "[PanelMaster] Iniciando Minecraft con $JAR_FILE (Java ' + javaVer + ', heap: ' + jvmHeapMb + 'MB)...";',
+      `exec java -Xms128M -Xmx${jvmHeapMb}M ${customArgs} -Dterminal.jline=false -Dterminal.ansi=true -jar "$JAR_FILE" nogui`
     ].join(' ');
+
+    this.emitServiceLog(
+      options.serviceId,
+      `\x1b[36m[PanelMaster Daemon]\x1b[0m Arrancando contenedor aislado (Java ${javaVer}, ${memoryMb} MB RAM, ${effectiveCores.toFixed(1)} vCPU)...\r\n`
+    );
 
     const createPayload: any = {
       Image: image,
-      Entrypoint: ['sh', '-c'], // Strictly overrides default entrypoint so /image/scripts/start never runs!
+      Entrypoint: ['sh', '-c'],
       WorkingDir: '/data',
       Cmd: [startupScript],
       Env: [
@@ -771,6 +937,11 @@ export class DockerService {
         Memory: memoryMb * 1024 * 1024,
         MemoryReservation: Math.floor(memoryMb * 0.75) * 1024 * 1024,
         MemorySwap: memoryMb * 1024 * 1024,
+        NanoCpus: nanoCpus,
+        CpuShares: 512,
+        BlkioWeight: 300,
+        PidsLimit: 256,
+        OomKillDisable: false,
       },
       Tty: true,
       OpenStdin: true,
@@ -794,6 +965,7 @@ export class DockerService {
       }
     } catch (err: any) {
       console.error(`[DockerService] Error creating container: ${err.message}`);
+      this.emitServiceLog(options.serviceId, `\x1b[31m[PanelMaster Daemon]\x1b[0m Error iniciando contenedor: ${err.message}\r\n`);
     }
 
     return null;
@@ -839,11 +1011,79 @@ export class DockerService {
     }
   }
 
+  async sendStdinCommand(containerId: string, cmd: string): Promise<boolean> {
+    const cleanCmd = cmd.trim();
+    if (!this.isAvailable() || !cleanCmd) return false;
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          try { req.destroy(); } catch {}
+          resolve(false);
+        }
+      }, 3000);
+
+      const req = http.request({
+        socketPath: this.socketPath,
+        path: `/v1.43/containers/${containerId}/attach?stdin=1&stream=1`,
+        method: 'POST',
+        headers: {
+          Connection: 'Upgrade',
+          Upgrade: 'tcp',
+        },
+      });
+
+      req.on('upgrade', (_res, socket) => {
+        if (settled) {
+          socket.destroy();
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        socket.write(`${cleanCmd}\n`, 'utf8', () => {
+          setTimeout(() => {
+            try { socket.end(); } catch {}
+            try { socket.destroy(); } catch {}
+          }, 50);
+          resolve(true);
+        });
+      });
+
+      req.on('response', (res) => {
+        res.resume();
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(false);
+        }
+      });
+
+      req.on('error', () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(false);
+        }
+      });
+
+      req.end();
+    });
+  }
+
   async execCommand(containerId: string, cmd: string): Promise<string> {
     const cleanCmd = cmd.trim();
     if (!this.isAvailable() || !cleanCmd) return '';
+
+    // 1. Primary path: Direct stdin injection via Docker /attach stream (Pterodactyl Wings style, zero process overhead)
     try {
-      // Escape command for shell execution
+      const injected = await this.sendStdinCommand(containerId, cleanCmd);
+      if (injected) return '';
+    } catch {}
+
+    // 2. Fallback path: PID 1 fd/0 or rcon-cli
+    try {
       const escapedCmd = cleanCmd.replace(/(["\\$`])/g, '\\$1');
       const execObj = await this.request(`/containers/${containerId}/exec`, 'POST', {
         AttachStdout: true,
@@ -852,7 +1092,7 @@ export class DockerService {
         Cmd: [
           'sh',
           '-c',
-          `rcon-cli --host 127.0.0.1 --port 25575 --password panelmaster-rcon "${escapedCmd}"`,
+          `printf '%s\\n' "${escapedCmd}" > /proc/1/fd/0 2>/dev/null || rcon-cli --host 127.0.0.1 --port 25575 --password panelmaster-rcon "${escapedCmd}"`,
         ],
       });
 
@@ -862,26 +1102,13 @@ export class DockerService {
           Tty: false,
         });
         const outStr = typeof out === 'string' ? out.trim() : '';
-
-        // If RCON connection refused (server is starting up, shutting down, or not ready yet)
         if (
           outStr.includes('connection refused') ||
           outStr.includes('Failed to connect to RCON') ||
           outStr.includes('dial tcp')
         ) {
-          // Direct fallback to console stdin via PID 1
-          try {
-            await this.request(`/containers/${containerId}/exec`, 'POST', {
-              AttachStdout: false,
-              AttachStderr: false,
-              Tty: false,
-              Cmd: ['sh', '-c', `echo "${escapedCmd}" > /proc/1/fd/0 2>/dev/null || true`],
-            });
-          } catch {}
-
-          return '\x1b[33m[PanelMaster]: El servidor aún se está iniciando o la consola no está lista para RCON. Espera unos segundos.\x1b[0m';
+          return '\x1b[33m[PanelMaster]: El servidor aún se está iniciando o la consola no está lista.\x1b[0m';
         }
-
         return outStr;
       }
     } catch (err: any) {
@@ -891,6 +1118,11 @@ export class DockerService {
   }
 
   async getContainerStats(serviceId: string): Promise<ContainerStatsResult> {
+    const cached = this.statsCache.get(serviceId);
+    if (cached && Date.now() - cached.timestamp < 2000) {
+      return cached.data;
+    }
+
     const containerName = `nexus-${serviceId}`;
     const container = await this.findContainerByName(containerName);
 
@@ -914,7 +1146,7 @@ export class DockerService {
     const configuredMemoryLimitBytes = configuredMemoryMb * 1024 * 1024;
 
     if (!container || !this.isAvailable()) {
-      return {
+      const offlineResult: ContainerStatsResult = {
         cpuPercent: 0,
         memoryUsageBytes: 0,
         memoryLimitBytes: configuredMemoryLimitBytes,
@@ -926,6 +1158,8 @@ export class DockerService {
         networkTxFormatted: '0 B/s',
         isOnline: false,
       };
+      this.statsCache.set(serviceId, { timestamp: Date.now(), data: offlineResult });
+      return offlineResult;
     }
 
     try {
@@ -968,7 +1202,7 @@ export class DockerService {
         return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
       };
 
-      return {
+      const result: ContainerStatsResult = {
         cpuPercent: Math.min(100, Math.max(0, Math.round(cpuPercent * 10) / 10)),
         memoryUsageBytes,
         memoryLimitBytes,
@@ -980,11 +1214,13 @@ export class DockerService {
         networkTxFormatted: formatBytes(networkTxBytes),
         isOnline: container.State === 'running',
       };
+      this.statsCache.set(serviceId, { timestamp: Date.now(), data: result });
+      return result;
     } catch {
       return {
         cpuPercent: 0,
         memoryUsageBytes: 0,
-        memoryLimitBytes: 2048 * 1024 * 1024,
+        memoryLimitBytes: configuredMemoryLimitBytes,
         diskUsageBytes,
         diskLimitBytes,
         networkRxBytes: 0,
@@ -998,7 +1234,8 @@ export class DockerService {
 
   async getSystemOverviewStats(): Promise<SystemOverviewStats> {
     const containers = await this.listContainers();
-    const runningContainers = containers.filter((c) => c.State === 'running');
+    const userContainers = containers.filter((c) => c.Names?.some((n: string) => n.startsWith('/nexus-srv-')));
+    const runningContainers = userContainers.filter((c) => c.State === 'running');
 
     // Host CPU
     const cpus = os.cpus();
@@ -1024,32 +1261,44 @@ export class DockerService {
       }
     } catch {}
 
-    // Aggregate Network across all containers
+    // Read Host Network I/O directly from /proc/net/dev (zero container stats polling overhead)
     let totalRx = 0;
     let totalTx = 0;
-    for (const c of runningContainers.slice(0, 10)) {
-      try {
-        const s = await this.request(`/containers/${c.Id}/stats?stream=false`);
-        if (s && s.networks) {
-          for (const net of Object.values(s.networks) as any[]) {
-            totalRx += net.rx_bytes || 0;
-            totalTx += net.tx_bytes || 0;
+    try {
+      if (fs.existsSync('/proc/net/dev')) {
+        const netDev = fs.readFileSync('/proc/net/dev', 'utf8');
+        const lines = netDev.split('\n').slice(2);
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('lo:')) continue;
+          const parts = trimmed.split(/[:\s]+/).filter(Boolean);
+          if (parts.length >= 10) {
+            totalRx += Number(parts[1]) || 0;
+            totalTx += Number(parts[9]) || 0;
           }
         }
-      } catch {}
-    }
+      }
+    } catch {}
+
+    const now = Date.now();
+    const elapsedSec = Math.max(1, (now - this.prevNetworkTime) / 1000);
+    const rxRate = this.prevNetworkRx > 0 ? Math.max(0, (totalRx - this.prevNetworkRx) / elapsedSec) : 0;
+    const txRate = this.prevNetworkTx > 0 ? Math.max(0, (totalTx - this.prevNetworkTx) / elapsedSec) : 0;
+    this.prevNetworkRx = totalRx;
+    this.prevNetworkTx = totalTx;
+    this.prevNetworkTime = now;
 
     const formatBytes = (bytes: number) => {
-      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024) return `${Math.round(bytes)} B`;
       if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
       if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
       return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
     };
 
     return {
-      serverCount: containers.length,
+      serverCount: userContainers.length,
       serversOnline: runningContainers.length,
-      serversOffline: containers.length - runningContainers.length,
+      serversOffline: userContainers.length - runningContainers.length,
       cpuCores,
       cpuUsageCores,
       cpuUsagePercent,
@@ -1059,9 +1308,44 @@ export class DockerService {
       diskTotalBytes,
       networkRxBytes: totalRx,
       networkTxBytes: totalTx,
-      networkRateFormatted: `${formatBytes(totalRx / 60)}/s in • ${formatBytes(totalTx / 60)}/s out`,
+      networkRateFormatted: `${formatBytes(rxRate)}/s in • ${formatBytes(txRate)}/s out`,
       bandwidthTotalFormatted: `${formatBytes(totalRx + totalTx)}`,
     };
+  }
+
+  private demuxDockerStreamChunk(rawChunk: Buffer, carry: Buffer): { text: string; remaining: Buffer } {
+    const buf = carry.length > 0 ? Buffer.concat([carry, rawChunk]) : rawChunk;
+    // Check if chunk uses Docker 8-byte multiplexed header [streamType(1|2), 0, 0, 0, lenBE32]
+    const looksMultiplexed =
+      buf.length >= 8 &&
+      (buf[0] === 1 || buf[0] === 2) &&
+      buf[1] === 0 &&
+      buf[2] === 0 &&
+      buf[3] === 0;
+
+    if (!looksMultiplexed) {
+      return { text: buf.toString('utf-8'), remaining: Buffer.alloc(0) };
+    }
+
+    let text = '';
+    let offset = 0;
+    while (offset < buf.length) {
+      if (buf.length - offset < 8) {
+        return { text, remaining: buf.subarray(offset) };
+      }
+      if ((buf[offset] === 1 || buf[offset] === 2) && buf[offset + 1] === 0 && buf[offset + 2] === 0 && buf[offset + 3] === 0) {
+        const frameLen = buf.readUInt32BE(offset + 4);
+        if (offset + 8 + frameLen > buf.length) {
+          return { text, remaining: buf.subarray(offset) };
+        }
+        text += buf.subarray(offset + 8, offset + 8 + frameLen).toString('utf-8');
+        offset += 8 + frameLen;
+      } else {
+        text += buf.subarray(offset).toString('utf-8');
+        return { text, remaining: Buffer.alloc(0) };
+      }
+    }
+    return { text, remaining: Buffer.alloc(0) };
   }
 
   async getLogs(containerId: string, tail = 100): Promise<string> {
@@ -1082,24 +1366,11 @@ export class DockerService {
           res.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
           res.on('end', () => {
             const raw = Buffer.concat(chunks);
-            let cleaned = '';
-            let offset = 0;
-            while (offset < raw.length) {
-              if (raw.length - offset >= 8 && (raw[offset] === 1 || raw[offset] === 2) && raw[offset + 1] === 0) {
-                const frameLen = raw.readUInt32BE(offset + 4);
-                const frameStart = offset + 8;
-                const frameEnd = Math.min(raw.length, frameStart + frameLen);
-                cleaned += raw.subarray(frameStart, frameEnd).toString('utf-8');
-                offset = frameEnd;
-              } else {
-                cleaned += raw.subarray(offset).toString('utf-8');
-                break;
-              }
-            }
-            if (cleaned.startsWith('{"message":')) {
+            const { text } = this.demuxDockerStreamChunk(raw, Buffer.alloc(0));
+            if (text.startsWith('{"message":')) {
               resolve('');
             } else {
-              resolve(cleaned);
+              resolve(text);
             }
           });
         }
@@ -1120,6 +1391,7 @@ export class DockerService {
       return { abort: () => {} };
     }
 
+    let carry: Buffer = Buffer.alloc(0);
     const req = http.request(
       {
         socketPath: this.socketPath,
@@ -1133,12 +1405,11 @@ export class DockerService {
         }
 
         res.on('data', (chunk) => {
-          let str = chunk.toString('utf-8');
-          if (chunk.length > 8 && (chunk[0] === 1 || chunk[0] === 2) && chunk[1] === 0 && chunk[2] === 0 && chunk[3] === 0) {
-            str = chunk.slice(8).toString('utf-8');
-          }
-          if (str.startsWith('{"message":')) return;
-          onData(str);
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          const parsed = this.demuxDockerStreamChunk(buf, carry);
+          carry = parsed.remaining;
+          if (!parsed.text || parsed.text.startsWith('{"message":')) return;
+          onData(parsed.text);
         });
         res.on('end', onEnd);
       }

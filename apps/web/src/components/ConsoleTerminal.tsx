@@ -7,7 +7,7 @@ import { toast } from './Toast';
 interface ConsoleTerminalProps {
   serviceId: string;
   serviceStatus: string;
-  onAction: (action: 'START' | 'STOP' | 'RESTART' | 'KILL') => void;
+  onAction: (action: 'START' | 'STOP' | 'RESTART' | 'KILL', skipHttp?: boolean) => void;
   onStatusChange?: (status: string) => void;
 }
 
@@ -41,7 +41,15 @@ function colorizeLogLine(line: string): string {
   if (!text) return '';
 
   if (text.startsWith('{"message":') && text.includes('No such container')) {
-    return '\x1b[33m[PanelMaster] El contenedor anterior no existe. Creando nuevo contenedor...\x1b[0m';
+    return '\x1b[33m[PanelMaster Daemon]\x1b[0m Contenedor anterior no encontrado. Creando nuevo entorno aislado...';
+  }
+
+  if (text.includes('[PanelMaster Daemon]') && !text.includes('\x1b[')) {
+    return `\x1b[36m${text}\x1b[0m`;
+  }
+
+  if (text.startsWith('[PanelMaster]') && !text.includes('\x1b[')) {
+    return `\x1b[1;36m${text}\x1b[0m`;
   }
 
   if (text.includes('§')) {
@@ -208,10 +216,21 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
         if (!isMounted) return;
         const text = typeof event.data === 'string' ? event.data : '';
 
-        if (text.includes('El servidor se encuentra apagado') || text.includes('Servidor detenido') || text.includes('detenido.')) {
+        if (
+          text.includes('El servidor se encuentra apagado') ||
+          text.includes('Servidor detenido') ||
+          text.includes('se ha detenido.') ||
+          text.includes('No se pudo iniciar')
+        ) {
           setIsOnline(false);
           onStatusChange?.('STOPPED');
-        } else if (text.includes('Iniciando') || text.includes('Done (') || text.includes('Starting Minecraft') || text.includes('Listening on')) {
+        } else if (
+          text.includes('Iniciando') ||
+          text.includes('Arrancando contenedor') ||
+          text.includes('Done (') ||
+          text.includes('Starting Minecraft') ||
+          text.includes('Listening on')
+        ) {
           setIsOnline(true);
           onStatusChange?.('RUNNING');
         }
@@ -251,13 +270,6 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
 
     connectWs();
 
-    // Forward terminal keystrokes to WS
-    term.onData((data) => {
-      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(data);
-      }
-    });
-
     const handleResize = () => fitAddon.fit();
     window.addEventListener('resize', handleResize);
 
@@ -279,10 +291,11 @@ export const ConsoleTerminal: React.FC<ConsoleTerminalProps> = ({
       onStatusChange?.('STOPPED');
     }
 
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      socketRef.current.send(`__ACTION__:${act}`);
+    const wsOpen = socketRef.current && socketRef.current.readyState === WebSocket.OPEN;
+    if (wsOpen) {
+      socketRef.current!.send(`__ACTION__:${act}`);
     }
-    onAction(act);
+    onAction(act, !!wsOpen);
   };
 
   const sendRawCommand = (cmd: string) => {

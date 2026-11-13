@@ -74,7 +74,7 @@ export function App() {
     return [];
   });
 
-  // Sync servers with backend
+  // Sync servers strictly with backend (PostgreSQL source of truth)
   useEffect(() => {
     if (!token) return;
     const fetchServices = async () => {
@@ -82,32 +82,37 @@ export function App() {
         const res = await fetch('/api/v1/services', {
           headers: { Authorization: `Bearer ${token}` },
         });
+        if (res.status === 401) {
+          localStorage.removeItem('pm_servers_cache');
+          setServers([]);
+          handleLogout();
+          return;
+        }
         if (res.ok) {
           const data = await res.json();
-          if (Array.isArray(data) && data.length > 0) {
+          if (Array.isArray(data)) {
             setServers((prev) => {
-              const mergedMap = new Map();
-              prev.forEach((s) => mergedMap.set(s.id, s));
-              data.forEach((s: any) => {
-                const existing = mergedMap.get(s.id) || {};
-                const mem = s.memoryLimitBytes ? Math.round(s.memoryLimitBytes / (1024 * 1024)) : 2048;
-                mergedMap.set(s.id, {
+              const prevMap = new Map(prev.map((p) => [p.id, p]));
+              const result = data.map((s: any) => {
+                const existing: any = prevMap.get(s.id) || {};
+                const mem = s.memoryLimitBytes ? Math.round(s.memoryLimitBytes / (1024 * 1024)) : existing.maxRamMb || 2048;
+                return {
                   ...existing,
                   id: s.id,
                   name: s.name,
                   status: s.status,
                   egg: s.template?.name || existing.egg || 'Minecraft Java (Paper)',
+                  template: s.template?.name || existing.template || 'Minecraft Java (Paper)',
                   maxRamMb: mem,
-                  ramMb: Math.round(mem * 0.35),
-                  ram: `${((mem * 0.35) / 1024).toFixed(1)} / ${(mem / 1024).toFixed(0)} GB`,
-                  cpuUsage: 1.8,
-                  cpu: '1.8%',
-                  port: s.instances?.[0]?.ports?.[0]?.port || 25565,
-                  node: s.instances?.[0]?.node?.name || 'node-01',
-                  ip: s.instances?.[0]?.node?.fqdn || '127.0.0.1',
-                });
+                  ramMb: existing.ramMb ?? Math.round(mem * 0.35),
+                  ram: existing.ram || `${((mem * 0.35) / 1024).toFixed(1)} / ${(mem / 1024).toFixed(0)} GB`,
+                  cpuUsage: existing.cpuUsage ?? 0,
+                  cpu: existing.cpu || '0%',
+                  port: s.instances?.[0]?.ports?.[0]?.port || existing.port || 25565,
+                  node: s.instances?.[0]?.node?.name || existing.node || 'node-01',
+                  ip: s.instances?.[0]?.node?.fqdn || existing.ip || window.location.hostname || '127.0.0.1',
+                };
               });
-              const result = Array.from(mergedMap.values());
               localStorage.setItem('pm_servers_cache', JSON.stringify(result));
               return result;
             });
@@ -149,6 +154,10 @@ export function App() {
                   node: srv.instances?.[0]?.node?.name || 'node-01',
                   ip: srv.instances?.[0]?.node?.fqdn || '127.0.0.1',
                 });
+              } else {
+                setSelectedServer(null);
+                setCurrentView('dashboard');
+                window.history.replaceState(null, '', '/');
               }
             })
             .catch(() => {});
@@ -172,6 +181,9 @@ export function App() {
     localStorage.removeItem('nexus_token');
     localStorage.removeItem('nexus_refresh');
     localStorage.removeItem('nexus_org_id');
+    localStorage.removeItem('pm_servers_cache');
+    setServers([]);
+    setSelectedServer(null);
     setToken(null);
   };
 
@@ -218,7 +230,11 @@ export function App() {
     }
   };
 
-  const handleServerAction = (serverId: string, action: 'START' | 'STOP' | 'RESTART' | 'KILL') => {
+  const handleServerAction = (
+    serverId: string,
+    action: 'START' | 'STOP' | 'RESTART' | 'KILL',
+    skipBackendRequest = false
+  ) => {
     const nextStatus = action === 'STOP' || action === 'KILL' ? 'STOPPED' : 'RUNNING';
     const updated = servers.map((s) => (s.id === serverId ? { ...s, status: nextStatus } : s));
     setServers(updated);
@@ -231,6 +247,8 @@ export function App() {
       });
     }
 
+    if (skipBackendRequest) return;
+
     // Notify backend
     const currentToken = localStorage.getItem('nexus_token');
     fetch(`/api/v1/services/${serverId}/actions`, {
@@ -241,6 +259,22 @@ export function App() {
       },
       body: JSON.stringify({ action }),
     }).catch(() => {});
+  };
+
+  const handleDeleteServer = async (serverId: string) => {
+    const currentToken = localStorage.getItem('nexus_token');
+    try {
+      await fetch(`/api/v1/services/${serverId}`, {
+        method: 'DELETE',
+        headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : {},
+      });
+    } catch {}
+    const remaining = servers.filter((s) => s.id !== serverId);
+    setServers(remaining);
+    localStorage.setItem('pm_servers_cache', JSON.stringify(remaining));
+    setSelectedServer(null);
+    setCurrentView('dashboard');
+    window.history.pushState(null, '', '/');
   };
 
   const handleCreatedServer = (newSrv: any) => {
@@ -324,7 +358,7 @@ export function App() {
         {selectedServer && currentView === 'console' && (
           <ServerConsole
             server={selectedServer}
-            onAction={(act) => handleServerAction(selectedServer.id, act)}
+            onAction={(act, skipHttp) => handleServerAction(selectedServer.id, act, skipHttp)}
           />
         )}
 
@@ -375,6 +409,7 @@ export function App() {
               setSelectedServer(updated);
               setServers(servers.map((s) => (s.id === updated.id ? updated : s)));
             }}
+            onDeleteServer={handleDeleteServer}
           />
         )}
       </main>

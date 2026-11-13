@@ -825,7 +825,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     } else if (serverActionConfirm.type === 'transfer') {
       toast.info('Transferencia iniciada en background hacia nodo de destino.');
     } else if (serverActionConfirm.type === 'safely_delete' || serverActionConfirm.type === 'force_delete') {
+      const token = localStorage.getItem('nexus_token');
+      fetch(`/api/v1/services/${editingServer.id}`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      }).catch(() => {});
       const updated = servers.filter((s) => s.id !== editingServer.id);
+      localStorage.setItem('pm_servers_cache', JSON.stringify(updated));
       if (onUpdateServers) onUpdateServers(updated);
       setEditingServer(null);
       toast.success(`Servidor eliminado ${serverActionConfirm.type === 'force_delete' ? 'permanentemente' : 'de forma segura'}.`);

@@ -720,9 +720,12 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     });
 
     const body = createSchema.parse(request.body);
-    const randHex = crypto.randomBytes(6).toString('hex');
-    const serviceId = body.id || `srv-${randHex}`;
-    const slug = body.name.toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + Math.floor(Math.random() * 1000);
+    const isTimestampId = /^srv-\d{10,}$/.test(body.id || '');
+    const serviceId = !body.id || isTimestampId ? `srv-${crypto.randomBytes(8).toString('hex')}` : body.id;
+    const slug =
+      (body.name.toLowerCase().replace(/[^a-z0-9]/g, '-') || 'server') +
+      '-' +
+      crypto.randomBytes(3).toString('hex');
 
     // Ensure template & templateVersion exist in DB
     let template = body.templateId ? await prisma.template.findUnique({ where: { id: body.templateId } }) : null;
@@ -754,7 +757,7 @@ export async function servicesRoutes(fastify: FastifyInstance) {
           data: {
             templateId: template.id,
             version: 'latest',
-            dockerImage: body.dockerImage || (body.category === 'databases' ? 'redis:7-alpine' : 'itzg/minecraft-server:latest'),
+            dockerImage: body.dockerImage || (body.category === 'databases' ? 'redis:7-alpine' : 'ghcr.io/pterodactyl/yolks:java_25'),
             startupCommand: body.startupCommand || '',
             minCpuCores: body.cpuCores,
             minMemoryMb: body.memoryMb,
@@ -799,7 +802,7 @@ export async function servicesRoutes(fastify: FastifyInstance) {
         memoryLimitBytes: BigInt(body.memoryMb) * BigInt(1024 * 1024),
         cpuLimitCores: body.cpuCores,
         diskLimitBytes: BigInt(body.diskMb) * BigInt(1024 * 1024),
-        status: body.startOnCompletion ? 'RUNNING' : 'STOPPED',
+        status: body.startOnCompletion ? 'INSTALLING' : 'STOPPED',
       },
     });
 
@@ -816,21 +819,24 @@ export async function servicesRoutes(fastify: FastifyInstance) {
       },
     });
 
-    // Create port allocation
-    await prisma.portAllocation.create({
-      data: {
-        nodeId: node.id,
-        port: body.port || 25565,
-        protocol: 'TCP',
-        serviceInstanceId: instance.id,
-        isPrimary: true,
-      },
-    });
+    // Create port allocation safely
+    const targetPort = body.port || (body.category === 'databases' ? 6379 : 25565);
+    try {
+      await prisma.portAllocation.create({
+        data: {
+          nodeId: node.id,
+          port: targetPort,
+          protocol: 'TCP',
+          serviceInstanceId: instance.id,
+          isPrimary: true,
+        },
+      });
+    } catch {}
 
     const isNonMinecraft = body.category && body.category !== 'minecraft';
     const effectiveImage = body.dockerImage || version.dockerImage || (body.category === 'databases' ? 'redis:7-alpine' : 'ghcr.io/pterodactyl/yolks:java_25');
 
-    let mcInitial = {
+    const mcInitial = {
       type: 'PAPER',
       version: '26.3',
       fork: 'Paper',
@@ -839,47 +845,115 @@ export async function servicesRoutes(fastify: FastifyInstance) {
       modpack: null,
     };
 
-    if (!isNonMinecraft) {
-      const autoFetched = await dockerService.ensureLatestMinecraftJar(service.id);
-      if (autoFetched) {
-        mcInitial.fork = autoFetched.fork;
-        mcInitial.type = autoFetched.fork.toUpperCase();
-        mcInitial.version = autoFetched.version;
-        mcInitial.java = autoFetched.java;
-      }
-    }
-
-    // Save initial server configuration in panelmaster.json
+    // Save initial server configuration in panelmaster.json immediately
     dockerService.saveServerConfig(service.id, {
       serviceId: service.id,
       name: body.name,
       egg: body.egg || template.name,
       category: body.category || template.category || 'minecraft',
       image: effectiveImage,
-      port: body.port || (body.category === 'databases' ? 6379 : 25565),
+      port: targetPort,
       startupCommand: body.startupCommand || version.startupCommand,
       memoryMb: body.memoryMb,
+      cpuCores: body.cpuCores,
       environment: body.environment || {},
       ...(isNonMinecraft ? {} : mcInitial),
     });
 
-    // Spawn REAL Docker container on host
-    try {
-      await dockerService.createServiceContainer({
-        serviceId: service.id,
-        name: service.name,
-        image: effectiveImage,
-        port: body.port || (body.category === 'databases' ? 6379 : 25565),
-        memoryMb: body.memoryMb,
-        cpuCores: body.cpuCores,
-        environment: body.environment as Record<string, string>,
-        startNow: body.startOnCompletion,
-      });
-    } catch (dockerErr: any) {
-      fastify.log.warn(`[Docker] Notice on container start: ${dockerErr.message}`);
-    }
+    // Provision asynchronously so HTTP 201 returns instantly and live progress streams to Console WebSocket
+    (async () => {
+      try {
+        dockerService.emitServiceLog(
+          service.id,
+          `\r\n\x1b[36m[PanelMaster Daemon]\x1b[0m Aprovisionando servidor \x1b[1;37m${service.name}\x1b[0m...\r\n`
+        );
+        if (!isNonMinecraft) {
+          await dockerService.ensureLatestMinecraftJar(service.id);
+        }
+        const created = await dockerService.createServiceContainer({
+          serviceId: service.id,
+          name: service.name,
+          image: effectiveImage,
+          port: targetPort,
+          memoryMb: body.memoryMb,
+          cpuCores: body.cpuCores,
+          environment: body.environment as Record<string, string>,
+          startNow: body.startOnCompletion,
+        });
+        const finalStatus = created && body.startOnCompletion ? 'RUNNING' : 'STOPPED';
+        await prisma.service.updateMany({ where: { id: service.id }, data: { status: finalStatus } });
+        await prisma.serviceInstance.updateMany({ where: { serviceId: service.id }, data: { status: finalStatus } });
+      } catch (dockerErr: any) {
+        fastify.log.warn(`[Docker] Notice on async container provision: ${dockerErr.message}`);
+        await prisma.service.updateMany({ where: { id: service.id }, data: { status: 'STOPPED' } }).catch(() => {});
+        await prisma.serviceInstance.updateMany({ where: { serviceId: service.id }, data: { status: 'STOPPED' } }).catch(() => {});
+      }
+    })();
 
     return reply.status(201).send(serializeService(service));
+  });
+
+  // Delete Service permanently (Container + Host Volume + DB records)
+  fastify.delete('/:id', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      const container = await dockerService.findContainerByName(`nexus-${id}`);
+      if (container) {
+        await dockerService.request(`/containers/${container.Id}?force=true`, 'DELETE').catch(() => {});
+      }
+      const volPath = `/var/lib/panelmaster/volumes/${id}`;
+      if (fs.existsSync(volPath)) {
+        fs.rmSync(volPath, { recursive: true, force: true });
+      }
+      await prisma.portAllocation.deleteMany({
+        where: { serviceInstance: { serviceId: id } },
+      });
+      await prisma.serviceInstance.deleteMany({ where: { serviceId: id } });
+      await prisma.service.deleteMany({ where: { id } });
+
+      return reply.send({ success: true, message: 'Servidor eliminado permanentemente' });
+    } catch (err: any) {
+      fastify.log.error(`[Delete Service Error]: ${err.message}`);
+      return reply.status(500).send({ error: err.message });
+    }
+  });
+
+  // Reinstall Service (re-fetches binaries without wiping worlds/configs)
+  fastify.post('/:id/reinstall', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      const service = await prisma.service.findUnique({ where: { id } });
+      if (!service) {
+        return reply.status(404).send({ error: 'Service not found' });
+      }
+      dockerService.emitServiceLog(
+        id,
+        `\r\n\x1b[33m[PanelMaster Daemon]\x1b[0m Iniciando reinstalación limpia de software (conservando mundos y configuraciones)...\r\n`
+      );
+
+      const container = await dockerService.findContainerByName(`nexus-${id}`);
+      if (container && container.State === 'running') {
+        await dockerService.stopContainer(container.Id);
+      }
+
+      const cfg = dockerService.getServerConfig(id);
+      if (!cfg.category || cfg.category === 'minecraft') {
+        await dockerService.updateServerVersion(id, {
+          fork: cfg.fork || 'Paper',
+          version: cfg.version || '26.3',
+          java: cfg.java || 25,
+          cleanInstall: false,
+        });
+      } else {
+        await dockerService.createServiceContainer({ serviceId: id, name: service.name, startNow: true });
+      }
+
+      await prisma.service.updateMany({ where: { id }, data: { status: 'RUNNING' } });
+      return reply.send({ success: true, message: 'Reinstalación completada' });
+    } catch (err: any) {
+      fastify.log.error(`[Reinstall Error]: ${err.message}`);
+      return reply.status(500).send({ error: err.message });
+    }
   });
 
   // Service Actions (Start, Stop, Restart, Kill)
@@ -978,10 +1052,26 @@ export async function servicesRoutes(fastify: FastifyInstance) {
     const containerName = `nexus-${id}`;
 
     // Clean, elegant greeting without spam
-    wsClient.send(`\x1b[1;36m[PanelMaster]\x1b[0m Conectado a la consola de \x1b[1;37m${srvName}\x1b[0m\r\n`);
+    if (wsClient.readyState === WebSocket.OPEN) {
+      wsClient.send(`\x1b[1;36m[PanelMaster]\x1b[0m Conectado a la consola de \x1b[1;37m${srvName}\x1b[0m\r\n`);
+    }
 
     let activeStream: { abort: () => void } | null = null;
     let isWsClosed = false;
+
+    const unsubscribeServiceLogs = dockerService.onServiceLog(id, (msg) => {
+      if (wsClient.readyState === WebSocket.OPEN && !isWsClosed) {
+        wsClient.send(msg);
+      }
+    });
+
+    const heartbeatTimer = setInterval(() => {
+      try {
+        if (wsClient.readyState === WebSocket.OPEN && typeof wsClient.ping === 'function') {
+          wsClient.ping();
+        }
+      } catch {}
+    }, 25000);
 
     const stopActiveStream = () => {
       if (activeStream) {
@@ -1029,6 +1119,10 @@ export async function servicesRoutes(fastify: FastifyInstance) {
             wsClient.send('\r\n\x1b[33m[PanelMaster] El servidor se encuentra apagado. Pulsa "Iniciar" para encenderlo.\x1b[0m\r\n');
           }
         }
+      } else if (service?.status === 'INSTALLING') {
+        if (wsClient.readyState === WebSocket.OPEN) {
+          wsClient.send('\r\n\x1b[36m[PanelMaster Daemon]\x1b[0m Aprovisionando entorno e imagen Docker en segundo plano...\r\n');
+        }
       } else {
         if (wsClient.readyState === WebSocket.OPEN) {
           wsClient.send('\r\n\x1b[33m[PanelMaster] El servidor se encuentra apagado. Pulsa "Iniciar" para encenderlo.\x1b[0m\r\n');
@@ -1040,6 +1134,8 @@ export async function servicesRoutes(fastify: FastifyInstance) {
 
     wsClient.on('close', () => {
       isWsClosed = true;
+      clearInterval(heartbeatTimer);
+      unsubscribeServiceLogs();
       stopActiveStream();
     });
 
@@ -1061,13 +1157,13 @@ export async function servicesRoutes(fastify: FastifyInstance) {
           await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'RUNNING' } });
 
           // If already running and action is START, simply attach logs
-          let cur = await dockerService.findContainerByName(containerName);
+          const cur = await dockerService.findContainerByName(containerName);
           if (cur && cur.State === 'running' && act === 'START') {
             attachLogs(cur.Id);
             return;
           }
 
-          // Otherwise recreate/create container with latest settings (Pterodactyl pure architecture)
+          // Provision/create container (mutex prevents duplicate work; live progress streams via onServiceLog)
           const container = await dockerService.createServiceContainer({
             serviceId: id,
             name: srvName,
@@ -1080,6 +1176,12 @@ export async function servicesRoutes(fastify: FastifyInstance) {
             const found = await dockerService.findContainerByName(containerName);
             if (found) {
               attachLogs(found.Id);
+            } else {
+              await prisma.service.updateMany({ where: { id }, data: { status: 'STOPPED' } }).catch(() => {});
+              await prisma.serviceInstance.updateMany({ where: { serviceId: id }, data: { status: 'STOPPED' } }).catch(() => {});
+              if (wsClient.readyState === WebSocket.OPEN) {
+                wsClient.send('\r\n\x1b[31m[PanelMaster] No se pudo iniciar el contenedor del servidor.\x1b[0m\r\n');
+              }
             }
           }
         } else if (act === 'STOP') {
